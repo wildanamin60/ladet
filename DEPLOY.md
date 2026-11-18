@@ -25,9 +25,10 @@ TX→MQTT (mode pameran) ditolak oleh `parsePayload`.
 | GitHub | **https://github.com/wildanamin60/ladet** (public) |
 | Auto-deploy | aktif — push ke branch `main` langsung deploy produksi |
 
-`ladet.vercel.app` adalah domain utama project. Alias lama
-`ladet-dashboard.vercel.app` sudah dihapus (404) supaya hanya satu link
-yang dipakai.
+`ladet.vercel.app` adalah domain utama project. URL lama
+`ladet-dashboard.vercel.app` dibuat ulang otomatis oleh Vercel setiap deploy
+(warisan nama project sebelum rename), jadi `vercel.json` mengalihkannya
+(redirect 308) ke `ladet.vercel.app` — satu-satunya link yang perlu dibagikan.
 
 ## 1. Environment variables (wajib diset sebelum build)
 
