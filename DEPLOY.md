@@ -27,7 +27,7 @@ TX→MQTT (mode pameran) ditolak oleh `parsePayload`.
 
 `ladet.vercel.app` adalah domain utama project. URL lama
 `ladet-dashboard.vercel.app` dibuat ulang otomatis oleh Vercel setiap deploy
-(warisan nama project sebelum rename), jadi `vercel.json` mengalihkannya
+(warisan nama project sebelum rename), jadi `next.config.ts` mengalihkannya
 (redirect 308) ke `ladet.vercel.app` — satu-satunya link yang perlu dibagikan.
 
 ## 1. Environment variables (wajib diset sebelum build)
