@@ -15,6 +15,19 @@ Dashboard (Next.js, MQTT over WebSocket)
 Dashboard **hanya** menerima `ladet/data` dari RX. Payload flat sisa jalur
 TX→MQTT (mode pameran) ditolak oleh `parsePayload`.
 
+## 0. Status deploy saat ini
+
+| Item | Nilai |
+|---|---|
+| Akun Vercel | `wildanamin60` (team `muhammad-wildanun-amien-s-projects`) |
+| Project | `ladet-dashboard` |
+| URL produksi | **https://ladet.vercel.app** (dipakai bersama warga/juri) |
+| URL cadangan | https://ladet-dashboard.vercel.app |
+| GitHub | belum terhubung — repo masih lokal, deploy via Vercel CLI |
+
+`ladet.vercel.app` sudah didaftarkan sebagai domain project, jadi setiap
+`vercel --prod` berikutnya otomatis ikut memperbarui URL tersebut.
+
 ## 1. Environment variables (wajib diset sebelum build)
 
 | Nama | Nilai | Wajib |
