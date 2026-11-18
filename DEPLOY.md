@@ -20,13 +20,14 @@ TX→MQTT (mode pameran) ditolak oleh `parsePayload`.
 | Item | Nilai |
 |---|---|
 | Akun Vercel | `wildanamin60` (team `muhammad-wildanun-amien-s-projects`) |
-| Project | `ladet-dashboard` |
+| Project | `ladet` |
 | URL produksi | **https://ladet.vercel.app** (dipakai bersama warga/juri) |
-| URL cadangan | https://ladet-dashboard.vercel.app |
-| GitHub | belum terhubung — repo masih lokal, deploy via Vercel CLI |
+| GitHub | **https://github.com/wildanamin60/ladet** (public) |
+| Auto-deploy | aktif — push ke branch `main` langsung deploy produksi |
 
-`ladet.vercel.app` sudah didaftarkan sebagai domain project, jadi setiap
-`vercel --prod` berikutnya otomatis ikut memperbarui URL tersebut.
+`ladet.vercel.app` adalah domain utama project. Alias lama
+`ladet-dashboard.vercel.app` sudah dihapus (404) supaya hanya satu link
+yang dipakai.
 
 ## 1. Environment variables (wajib diset sebelum build)
 
@@ -55,12 +56,19 @@ vercel env add NEXT_PUBLIC_DEMO_MODE production
 vercel --prod
 ```
 
-## 3. Deploy lewat GitHub
+## 3. Deploy lewat GitHub (sudah aktif)
 
-1. Commit & push repo ini ke GitHub.
-2. vercel.com → **Add New Project** → import repo.
-3. Isi environment variables di atas (Production + Preview).
-4. Deploy.
+Repo: https://github.com/wildanamin60/ladet — sudah terhubung ke project
+Vercel `ladet`.
+
+```bash
+git add -A
+git commit -m "pesan perubahan"
+git push origin main        # otomatis deploy produksi ke ladet.vercel.app
+```
+
+Environment variables tetap dikelola di dashboard Vercel (bukan di repo),
+karena `.env.local` sengaja di-ignore.
 
 ## 4. Checklist setelah deploy
 
