@@ -1,0 +1,137 @@
+┌─────────────────────────────────────────────────────────────────┐
+│                    🔧 TEST 0 QUICK START                        │
+│                   MQTT Pipeline Verification                    │
+└─────────────────────────────────────────────────────────────────┘
+
+📋 PREREQUISITES
+  ✓ ESP32 RX with LoRa module
+  ✓ WiFi connection
+  ✓ Internet access (for HiveMQ broker)
+  ✓ Node.js installed
+  ✓ Browser with DevTools
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: Configure RX Firmware                                   │
+└─────────────────────────────────────────────────────────────────┘
+
+File: firmware/rx-mqtt-publisher/rx-mqtt-publisher.ino
+
+Line 50:  #define MQTT_TEST_MODE 1        // ← UNCOMMENT
+Line 26:  const char* WIFI_SSID = "...";  // ← YOUR WIFI
+Line 27:  const char* WIFI_PASS = "...";  // ← YOUR PASSWORD
+
+Upload to ESP32 → Open Serial Monitor (115200)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: Verify ESP32 Output                                     │
+└─────────────────────────────────────────────────────────────────┘
+
+Expected Serial Monitor:
+  ✅ WiFi connected! IP: 192.168.x.x
+  ✅ MQTT broker connected! Server: broker.hivemq.com:1883
+  📡 Publishing to: ladet/data
+  { "type": "ladet-v1", "packet_id": 1, ... }
+  ✅ MQTT publish berhasil!
+  (repeats every 5 seconds)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: Start Website                                           │
+└─────────────────────────────────────────────────────────────────┘
+
+Terminal:
+  cd D:\SKRIPSI\ladet-dashboard
+  npm run dev
+
+Browser:
+  http://localhost:3000/dashboard
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: Verify Browser Console                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+Press F12 → Console tab
+
+Expected log (every 5 seconds):
+  [MQTT] Message received: ladet/data {
+    node_id: "LADET-NODE-01",
+    soil_saturation: 46.76,
+    vibration_freq: 0.004,
+    tilt_angle: 0.6,
+    rssi: -95,
+    snr: 8.5,
+    ...
+  }
+
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: Verify Dashboard                                        │
+└─────────────────────────────────────────────────────────────────┘
+
+Expected values:
+  📊 Kelembaban Tanah:    46.76 %
+  📊 Getaran (Delta-G):   0.004 Δg  ← Not Hz!
+  📊 Kemiringan:          0.6 °
+  🟢 Status:              AMAN
+  🟢 MQTT:                MQTT ON
+
+Table should add new row every 5 seconds
+
+┌─────────────────────────────────────────────────────────────────┐
+│ ❌ TROUBLESHOOTING                                               │
+└─────────────────────────────────────────────────────────────────┘
+
+Problem: Serial shows "MQTT connected" but dashboard not updating
+
+Check:
+  1. Browser console has "[MQTT] Message received"?
+     → NO: See DEBUGGING_TEST_0.md section 2-6
+     → YES: Hard refresh browser (Ctrl+Shift+R)
+
+  2. .env.local has DEMO_MODE=false?
+     → NO: Change to false, restart npm run dev
+     → YES: Continue to #3
+
+  3. Network tab shows WebSocket connected?
+     → NO: Firewall blocking port 8884
+     → YES: Continue to #4
+
+  4. Topic match: ladet/data (both sides)?
+     → NO: Fix mismatch, re-upload firmware
+     → YES: Full restart (ESP32 + website + browser)
+
+┌─────────────────────────────────────────────────────────────────┐
+│ 📸 DELIVERABLES                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+Screenshot & send:
+  1. Serial Monitor (JSON + "MQTT publish berhasil!")
+  2. Browser Console ("[MQTT] Message received")
+  3. Dashboard (showing 46.76%, 0.004, 0.6°)
+
+Confirm:
+  ✓ Values match exactly: 46.76% / 0.004 Δg / 0.6°
+  ✓ Status = AMAN (green)
+  ✓ Table updates every 5 seconds
+  ✓ No console errors
+
+┌─────────────────────────────────────────────────────────────────┐
+│ 🎯 NEXT: TEST 1 (LoRa)                                          │
+└─────────────────────────────────────────────────────────────────┘
+
+After TEST 0 success:
+  1. Comment: // #define MQTT_TEST_MODE 1
+  2. Set LORA_SF to match TX (7/9/12)
+  3. Upload firmware
+  4. Power TX + RX
+  5. Verify 21 fields
+
+┌─────────────────────────────────────────────────────────────────┐
+│ 📚 DOCUMENTS                                                     │
+└─────────────────────────────────────────────────────────────────┘
+
+  DEBUGGING_TEST_0.md    - Full troubleshooting (6 steps)
+  SUMMARY_MQTT_FIXES.md  - Changes summary
+  TEST_0_QUICK_START.txt - This file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Prepared: 2026-09-15 | Kiro AI | Status: READY FOR TEST 0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

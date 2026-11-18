@@ -1,0 +1,78 @@
+# QUICK FIX: Home Page OFFLINE Issue
+
+## The Problem
+Your Home page shows "OFFLINE" with 0.0% values, while Dashboard Engineer shows correct MQTT data.
+
+## Why This Happens
+Next.js environment variables are loaded at build time. You need to restart the dev server.
+
+## Quick Fix (Do This Now)
+
+### 1. Stop Dev Server
+In your terminal, press: **Ctrl+C**
+
+### 2. Clear Cache
+```powershell
+cd D:\SKRIPSI\ladet-dashboard
+Remove-Item -Recurse -Force .next
+```
+
+### 3. Restart Dev Server
+```powershell
+npm run dev
+```
+
+### 4. Hard Refresh Browser
+- Open http://localhost:3000
+- Press **Ctrl+Shift+R** (hard refresh)
+- Open Console (F12)
+
+### 5. Check Console Logs
+You should see:
+```
+[MQTT Home Debug] NEXT_PUBLIC_DEMO_MODE: false
+[MQTT Home Debug] NEXT_PUBLIC_MQTT_BROKER_URL: wss://broker.hivemq.com:8884/mqtt
+[MQTT Home Debug] IS_DEMO: false
+[MQTT Home] useEffect triggered, IS_DEMO: false
+[MQTT Home] Connecting to broker: wss://broker.hivemq.com:8884/mqtt
+[MQTT Home] Message received: ladet/data {...}
+```
+
+### 6. Expected Result
+- Home page should show "MQTT ON" or remove "OFFLINE" badge
+- Values should match Dashboard: **46.8%, 0.00 Δg, 0.60°**
+- Status: **AMAN** (green)
+- No random color changes
+
+## If Still OFFLINE
+
+### Check Environment Variables in Browser Console
+Type this in browser console (F12):
+```javascript
+console.log('DEMO_MODE:', process.env.NEXT_PUBLIC_DEMO_MODE);
+console.log('BROKER:', process.env.NEXT_PUBLIC_MQTT_BROKER_URL);
+```
+
+Expected output:
+```
+DEMO_MODE: false
+BROKER: wss://broker.hivemq.com:8884/mqtt
+```
+
+If you see `undefined`, the environment variables aren't loaded.
+
+### Solution for undefined variables:
+1. Check `.env.local` exists in `D:\SKRIPSI\ladet-dashboard\`
+2. Stop dev server completely (Ctrl+C)
+3. Delete `.next` folder
+4. Run `npm run dev` again
+5. Wait for compilation to finish
+6. Hard refresh browser (Ctrl+Shift+R)
+
+## What I Changed
+Added debug logging to `app/page.tsx` (lines 16-19, 162-168) to help diagnose the issue.
+
+## Next Steps After Fix
+1. Take screenshot of both pages showing same data
+2. Share in chat to confirm fix
+3. Move to TEST 1 (LoRa end-to-end testing)

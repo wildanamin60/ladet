@@ -1,0 +1,96 @@
+===============================================================================
+  ✅ MQTT DEBUGGING - FIXES COMPLETE
+  Ready for TEST 0 Execution
+===============================================================================
+
+📋 ISSUE SUMMARY
+  ❌ React key duplicate warnings in console
+  ❌ MQTT connected but dashboard not updating
+  ❌ No visibility into MQTT message flow
+
+✅ FIXES APPLIED
+  1. components/PacketTable.tsx (Line 61)
+     Before: key={row.id ?? i}
+     After:  key={`${row.created_at}-${row.packet_id}-${i}`}
+     Result: ✅ No more duplicate key warnings
+
+  2. app/(admin)/dashboard/page.tsx (Line 159)
+     Added:  console.log('[MQTT] Message received:', topic, parsed);
+     Result: ✅ Full MQTT message visibility
+
+📚 DOCUMENTATION CREATED
+  ✅ DEBUGGING_TEST_0.md        - Complete troubleshooting guide
+  ✅ SUMMARY_MQTT_FIXES.md      - Changes summary
+  ✅ TEST_0_QUICK_START.txt     - Quick reference card
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 EXECUTE TEST 0 NOW
+
+STEP 1: Configure RX Firmware
+  File: firmware/rx-mqtt-publisher/rx-mqtt-publisher.ino
+  Line 50:  #define MQTT_TEST_MODE 1        // UNCOMMENT!
+  Line 26:  const char* WIFI_SSID = "YOUR_WIFI_SSID";
+  Line 27:  const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+  Upload to ESP32 → Open Serial Monitor (115200)
+
+STEP 2: Verify ESP32 Output
+  Expected (every 5 seconds):
+    ✅ MQTT publish berhasil!
+    JSON with sensor/radio/test nested structure
+
+STEP 3: Start Website
+  Terminal: npm run dev
+  Browser: http://localhost:3000/dashboard
+
+STEP 4: Verify Browser Console (F12)
+  Expected (every 5 seconds):
+    [MQTT] Message received: ladet/data {...}
+
+STEP 5: Verify Dashboard Values
+  📊 Kelembaban:  46.76 %
+  📊 Getaran:     0.004 Δg  (NOT Hz!)
+  📊 Kemiringan:  0.6 °
+  🟢 Status:      AMAN
+  🟢 MQTT:        MQTT ON
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❌ TROUBLESHOOTING
+  1. Browser console has "[MQTT] Message received"?
+     NO  → See DEBUGGING_TEST_0.md sections 2-6
+     YES → Hard refresh (Ctrl+Shift+R)
+
+  2. Dashboard not updating?
+     → Stop npm run dev
+     → Restart ESP32 RX
+     → npm run dev
+     → Clear browser cache
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📸 SUBMIT RESULTS
+  Screenshots needed:
+    1. Serial Monitor (JSON + "MQTT publish berhasil!")
+    2. Browser Console ([MQTT] Message received)
+    3. Dashboard (46.76%, 0.004 Δg, 0.6°)
+
+  Confirmation:
+    ☐ Values match: 46.76% / 0.004 Δg / 0.6°
+    ☐ Status: AMAN (green)
+    ☐ MQTT: MQTT ON (green)
+    ☐ Table updates every 5 seconds
+    ☐ No console errors
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 AFTER TEST 0 SUCCESS → Move to TEST 1
+  1. Comment: // #define MQTT_TEST_MODE 1
+  2. Set LORA_SF to match TX (7/9/12)
+  3. Upload firmware
+  4. Power TX + RX
+  5. Verify end-to-end pipeline
+
+===============================================================================
+Prepared: 2026-09-15 | Kiro AI | Status: READY FOR TEST 0
+===============================================================================
