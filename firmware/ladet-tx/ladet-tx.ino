@@ -19,6 +19,7 @@
 #include <Adafruit_BNO055.h>
 #include <RTClib.h>
 #include <Preferences.h>   // simpan SF aktif di flash (NVS) — tahan reset
+#include <esp_system.h>    // esp_reset_reason() — penyebab reboot terakhir
 
 // =====================================================
 // PIN CONFIGURATION
@@ -665,6 +666,53 @@ void takeBaseline() {
 }
 
 // =====================================================
+// PEMULIHAN DIRI SAAT BOOT
+// =====================================================
+// Sebelumnya tiap inisialisasi yang gagal (RTC/ADXL/BNO/LoRa) berakhir di
+// `while (true) { delay(1000); }` — alat diam total sampai listriknya dicabut
+// manual. Delay di dalam loop itu justru MEMBERI MAKAN watchdog, jadi WDT
+// bawaan ESP32 pun tidak bisa menyelamatkan.
+//
+// Sekarang: coba beberapa kali (kabel longgar / sensor telat naik tegangan
+// sering lolos pada percobaan ke-2), lalu restart sendiri. Kalau sensornya
+// memang rusak permanen, alat akan reboot berulang — dan itu TERLIHAT di
+// Serial & dashboard, bukan diam tanpa jejak.
+
+/** Nama penyebab reset terakhir — untuk log di Serial Monitor. */
+const char* resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "POWERON (colokan/listrik)";
+    case ESP_RST_EXT:      return "EXT (tombol reset)";
+    case ESP_RST_SW:       return "SW (ESP.restart)";
+    case ESP_RST_PANIC:    return "PANIC (crash / watchdog)";
+    case ESP_RST_INT_WDT:  return "INT_WDT (interrupt macet)";
+    case ESP_RST_TASK_WDT: return "TASK_WDT (loop membeku)";
+    case ESP_RST_WDT:      return "WDT (watchdog)";
+    case ESP_RST_BROWNOUT: return "BROWNOUT (tegangan drop)";
+    case ESP_RST_DEEPSLEEP:return "DEEPSLEEP";
+    default:               return "UNKNOWN";
+  }
+}
+
+/**
+ * Jalankan `probe` sampai berhasil, atau restart ESP32 kalau habis percobaan.
+ * Sengaja TANPA default argument: preprocessor Arduino menyalin signature
+ * fungsi ke prototype, dan default argumen ganda membuat compile gagal.
+ */
+void bootRequire(const char* name, bool (*probe)(), int tries) {
+  for (int i = 1; i <= tries; i++) {
+    if (probe()) return;
+    Serial.printf("   %s gagal (percobaan %d/%d)\n", name, i, tries);
+    delay(500);
+  }
+  Serial.printf("ERROR: %s tidak merespons setelah %d percobaan\n", name, tries);
+  Serial.println("       Restart otomatis — cek kabel I2C/SPI & catu daya.");
+  Serial.flush();
+  delay(300);
+  ESP.restart();
+}
+
+// =====================================================
 // SETUP
 // =====================================================
 
@@ -677,6 +725,8 @@ void setup() {
   Serial.println("==================================================");
   Serial.println("       LADET TRANSMITTER v3.0");
   Serial.println("==================================================");
+  Serial.print("Reset terakhir  : ");
+  Serial.println(resetReasonName());
 
   // I2C
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -689,25 +739,16 @@ void setup() {
   Serial.println("ADC SOIL        : OK");
 
   // RTC
-  if (!rtc.begin()) {
-    Serial.println("ERROR: DS3231 tidak ditemukan!");
-    while (true) { delay(1000); }
-  }
+  bootRequire("DS3231", []() { return rtc.begin(); }, 5);
   Serial.println("RTC             : OK");
 
   // ADXL345
-  if (!adxl.begin()) {
-    Serial.println("ERROR: ADXL345 tidak ditemukan!");
-    while (true) { delay(1000); }
-  }
+  bootRequire("ADXL345", []() { return adxl.begin(); }, 5);
   adxl.setRange(ADXL345_RANGE_16_G);
   Serial.println("ADXL345         : OK");
 
   // BNO055
-  if (!bno.begin()) {
-    Serial.println("ERROR: BNO055 tidak ditemukan!");
-    while (true) { delay(1000); }
-  }
+  bootRequire("BNO055", []() { return bno.begin(); }, 5);
   delay(1000);
   bno.setExtCrystalUse(true);
   Serial.println("BNO055          : OK");
@@ -716,10 +757,7 @@ void setup() {
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
   LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
 
-  if (!LoRa.begin(LORA_FREQUENCY)) {
-    Serial.println("ERROR: LoRa gagal!");
-    while (true) { delay(1000); }
-  }
+  bootRequire("LoRa SX1278", []() { return LoRa.begin(LORA_FREQUENCY) != 0; }, 5);
 
   LoRa.setSpreadingFactor(activeSF);
   LoRa.setSignalBandwidth(LORA_BW);

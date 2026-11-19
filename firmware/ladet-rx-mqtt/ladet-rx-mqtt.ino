@@ -18,6 +18,7 @@
 #include <ArduinoJson.h>
 #include <LoRa.h>
 #include <Preferences.h>   // simpan SF aktif di flash (NVS) — tahan reset
+#include <esp_system.h>    // esp_reset_reason() — penyebab reboot terakhir
 
 // ══════════════════════════════════════════════════════════════════════════════
 // KONFIGURASI — SESUAIKAN DENGAN SETUP ANDA
@@ -136,6 +137,71 @@ const char* TX_ONLINE_TOPIC = "ladet/tx/online";
 bool txOnlinePublished = false;   // state "TX online" yang terakhir dipublish
 unsigned long lastOnlinePublish = 0;  // heartbeat kehadiran RX (tiap 20 dtk)
 Preferences prefs;                // penyimpanan NVS untuk SF aktif (tahan reset)
+
+// ── Diagnostik & pemulihan diri ──────────────────────────────────────────────
+// Watchdog bawaan ESP32 (Task WDT) hanya menangkap loop yang benar-benar
+// membeku. Kegagalan yang justru sering terjadi di lapangan adalah "setengah
+// hidup": WiFi stack nyangkut, atau MQTT tidak pernah bisa connect lagi.
+// Tidak ada WDT yang menolong kondisi itu, jadi RX reboot sendiri setelah
+// beberapa menit — lebih baik bolak-balik online daripada diam tanpa jejak.
+const char* RX_STATUS_TOPIC = "ladet/rx/status";   // JSON diagnostik (non-retained)
+uint16_t bootCount = 0;                            // jumlah boot (disimpan di NVS)
+unsigned long lastWifiOkMs = 0;
+unsigned long lastMqttOkMs = 0;
+const unsigned long WIFI_RESTART_MS  = 5UL * 60UL * 1000UL;  // 5 menit
+const unsigned long MQTT_RESTART_MS  = 5UL * 60UL * 1000UL;  // 5 menit
+const unsigned long HEALTH_INTERVAL_MS = 60000UL;            // lapor tiap 1 menit
+unsigned long lastHealthMs = 0;
+
+/** Nama penyebab reset terakhir — tampil di Serial & dikirim ke dashboard. */
+const char* resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "POWERON";
+    case ESP_RST_EXT:      return "EXT_RESET";
+    case ESP_RST_SW:       return "SW_RESTART";
+    case ESP_RST_PANIC:    return "PANIC";
+    case ESP_RST_INT_WDT:  return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT:      return "WDT";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_DEEPSLEEP:return "DEEPSLEEP";
+    default:               return "UNKNOWN";
+  }
+}
+
+/**
+ * Kirim diagnostik ke `ladet/rx/status`.
+ * Dashboard saat ini mengabaikan topik ini (bukan `ladet/data`), jadi tidak
+ * mengganggu alur data. Gunanya untuk memantau dari MQTT Explorer / mosquitto_sub:
+ * apakah RX sering reboot, heap menipis, atau WiFi melemah.
+ */
+void publishHealth() {
+  if (!mqttClient.connected()) return;
+  String json = "{\"reset\":\"" + String(resetReasonName()) + "\"" +
+                ",\"boot_count\":" + String(bootCount) +
+                ",\"uptime_s\":" + String(millis() / 1000UL) +
+                ",\"heap\":" + String(ESP.getFreeHeap()) +
+                ",\"wifi_rssi\":" + String(WiFi.RSSI()) +
+                ",\"sf\":" + String(activeSF) + "}";
+  mqttClient.publish(RX_STATUS_TOPIC, json.c_str());
+  Serial.println("📊 Health: " + json);
+}
+
+/**
+ * Restart dengan rapi: MQTT di-disconnect lebih dulu supaya broker TIDAK
+ * mem-publish LWT "offline". Tanpa ini, setiap reboot akan sempat membuat
+ * dashboard menampilkan RX mati padahal hanya sedang memulai ulang.
+ */
+void safeRestart(const char* reason) {
+  Serial.printf("♻️  Restart ESP32: %s\n", reason);
+  Serial.flush();
+  if (mqttClient.connected()) {
+    mqttClient.disconnect();
+    delay(300);
+  }
+  ESP.restart();
+}
+
 
 void publishConfigStatus(const char* state, bool txConfirmed) {
   if (!mqttClient.connected()) return;
@@ -402,12 +468,26 @@ const char*         delaySource         = "unknown"; // rtt | clock | clock-rel 
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
-  
+  // Jangan menunggu USB host selamanya: pada board dengan USB native (S3/C3)
+  // `while (!Serial)` menggantung kalau tidak ada Serial Monitor, sehingga alat
+  // tidak pernah jalan saat dipasang di lapangan tanpa laptop.
+  unsigned long serialWait = millis();
+  while (!Serial && millis() - serialWait < 3000UL) delay(10);
+
+  // Hitung boot (disimpan di NVS): kalau angkanya naik terus, ada yang
+  // menyebabkan RX reboot berulang — mudah dicek tanpa membuka Serial.
+  prefs.begin("ladet", false);
+  bootCount = (uint16_t)(prefs.getUShort("boots", 0) + 1);
+  prefs.putUShort("boots", bootCount);
+  prefs.end();
+
   Serial.println();
   Serial.println("═══════════════════════════════════════════════════════════");
   Serial.println("  LADET RX — Gateway MQTT Publisher");
   Serial.println("═══════════════════════════════════════════════════════════");
+  Serial.println();
+  Serial.printf("Reset terakhir : %s\n", resetReasonName());
+  Serial.printf("Boot ke-       : %u\n", bootCount);
   Serial.println();
   Serial.println("TEST CONFIGURATION:");
   Serial.printf("  Distance : %d m\n", TEST_DISTANCE_M);
@@ -498,6 +578,21 @@ void publishTestPacket() {
 #endif
 
 void loop() {
+  // ── Pemulihan diri (kasus "setengah hidup") ──
+  if (WiFi.status() == WL_CONNECTED) lastWifiOkMs = millis();
+  if (mqttClient.connected()) {
+    lastWifiOkMs = millis();
+    lastMqttOkMs = millis();
+  }
+  if (millis() - lastWifiOkMs > WIFI_RESTART_MS) {
+    safeRestart("WiFi tidak tersambung > 5 menit");
+  }
+  if (millis() - lastMqttOkMs > MQTT_RESTART_MS) {
+    // Broker sedang down juga memicu ini. Reboot tidak memperbaiki broker,
+    // tapi memaksa DNS/TCP handshake baru — dan itu tidak merugikan.
+    safeRestart("MQTT tidak tersambung > 5 menit");
+  }
+
   if (!mqttClient.connected()) {
     unsigned long now = millis();
     if (now - lastReconnectAttempt > 5000) {
@@ -524,6 +619,11 @@ void loop() {
       mqttClient.publish(TX_ONLINE_TOPIC, "offline", true);
       txOnlinePublished = false;
       Serial.println("📡 30 dtk tanpa paket LoRa → ladet/tx/online = offline");
+    }
+    // Diagnostik tiap 1 menit (reset terakhir, uptime, heap, RSSI).
+    if (millis() - lastHealthMs > HEALTH_INTERVAL_MS) {
+      lastHealthMs = millis();
+      publishHealth();
     }
   }
   
@@ -575,10 +675,24 @@ void setupLoRa() {
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
   
   LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
-  
-  if (!LoRa.begin(LORA_FREQ)) {
-    Serial.println("❌ LoRa init gagal!");
-    while (1);
+
+  // Dulu: `while (1);` → RX diam total sampai listriknya dicabut, dan WDT
+  // tidak menolong karena loop-nya tidak memberi makan apa pun tapi juga tidak
+  // pernah "membeku" di dalam delay. Sekarang dicoba ulang lalu restart sendiri.
+  bool loraOk = false;
+  for (int i = 1; i <= 5 && !loraOk; i++) {
+    loraOk = LoRa.begin(LORA_FREQ);
+    if (!loraOk) {
+      Serial.printf("\n   LoRa gagal (percobaan %d/5)", i);
+      delay(500);
+    }
+  }
+  if (!loraOk) {
+    Serial.println("\n❌ LoRa tidak merespons 5x — restart otomatis.");
+    Serial.println("   Cek wiring: SCK=18 MISO=19 MOSI=25 NSS=5 RST=14 DIO0=4, dan 3V3.");
+    Serial.flush();
+    delay(300);
+    ESP.restart();
   }
   
   // LoRa parameters (sama dengan TX)
@@ -623,6 +737,9 @@ boolean reconnectMQTT() {
     mqttClient.publish(RX_ONLINE_TOPIC, "online", true);
     // Umumkan state config RX saat ini ke dashboard
     publishConfigStatus("idle", true);
+    // Diagnostik pertama setelah (re)connect: penyebab reset & jumlah boot.
+    publishHealth();
+    lastHealthMs = millis();
     return true;
   } else {
     Serial.print("❌ MQTT gagal, rc=");
