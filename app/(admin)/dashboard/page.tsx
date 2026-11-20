@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import QoSCard from '@/components/QoSCard';
+import RxHealthCard from '@/components/RxHealthCard';
 import SensorCard from '@/components/SensorCard';
 import RealtimeChart from '@/components/RealtimeChart';
 import PacketTable from '@/components/PacketTable';
@@ -10,7 +11,7 @@ import type { SF } from '@/components/ScenarioSelector';
 import { formatTimeWIB, calculatePacketLoss } from '@/lib/calculations';
 import { normalizeLevel, soilLevel, vibrationLevel, tiltLevel, applyCalibration } from '@/lib/thresholds';
 import { generateDemoPayload, generateDemoHistory, resetDemoSequence } from '@/lib/demo';
-import { getMqttClient, parsePayload, publishCmd, publishPublicMode, DEFAULT_MQTT_CONFIG, LADET_TOPICS, CONFIG_STATUS_TOPIC, parseConfigStatus, type ConfigStatus, RX_ONLINE_TOPIC, TX_ONLINE_TOPIC, PUBLIC_MODE_TOPIC, parsePublicMode } from '@/lib/mqtt';
+import { getMqttClient, parsePayload, publishCmd, publishPublicMode, DEFAULT_MQTT_CONFIG, LADET_TOPICS, CONFIG_STATUS_TOPIC, parseConfigStatus, type ConfigStatus, RX_ONLINE_TOPIC, TX_ONLINE_TOPIC, PUBLIC_MODE_TOPIC, parsePublicMode, RX_STATUS_TOPIC, parseRxHealth, type RxHealth } from '@/lib/mqtt';
 import { insertSensorData } from '@/lib/supabase';
 import { sendLadetAlert } from '@/lib/telegram';
 import type { LadetPayload } from '@/lib/mqtt';
@@ -80,12 +81,22 @@ export default function DashboardPage() {
   // bukti baru → perangkat dianggap mati, walau pesan 'online' basi masih ada.
   const [rxSeenAt, setRxSeenAt] = useState<number | null>(null);
   const [txSeenAt, setTxSeenAt] = useState<number | null>(null);
+  // Diagnostik gateway RX (ladet/rx/status): reset terakhir, boot count, uptime,
+  // heap, RSSI. Bukan data sensor — hanya kesehatan perangkat.
+  const [rxHealth, setRxHealth] = useState<RxHealth | null>(null);
+  const [rxHealthAt, setRxHealthAt] = useState<number | null>(null);
   // rxSeenAt/txSeenAt di state → memicu re-render tiap bukti hidup; timer di
   // bawah memaksa re-render tiap detik supaya timeout basi tampil tepat waktu.
   const [, setNowTick] = useState(0);
+  // Jam browser disimpan di state (diisi timer), BUKAN Date.now() saat render —
+  // supaya render tetap murni dan tidak memicu peringatan lint.
+  const [nowMs, setNowMs] = useState(0);
   useEffect(() => {
     if (demo) return;
-    const t = setInterval(() => setNowTick(n => n + 1), 1000);
+    const t = setInterval(() => {
+      setNowTick(n => n + 1);
+      setNowMs(Date.now());
+    }, 1000);
     return () => clearInterval(t);
   }, [demo]);
   const PRESENCE_TIMEOUT_MS = 35000;
@@ -385,6 +396,8 @@ export default function DashboardPage() {
       // Kehadiran perangkat (retained → status terakhir langsung masuk)
       client.subscribe(RX_ONLINE_TOPIC);
       client.subscribe(TX_ONLINE_TOPIC);
+      // Diagnostik gateway (reset terakhir, boot count, uptime, heap, RSSI)
+      client.subscribe(RX_STATUS_TOPIC);
     };
     
     const handleDisconnect = () => {
@@ -398,6 +411,16 @@ export default function DashboardPage() {
     };
     
     const handleMessage = (topic: string, msg: Buffer) => {
+      // Diagnostik gateway RX — bukan data sensor. Jangan diteruskan ke pipeline
+      // payload (parsePayload akan menolaknya karena topik bukan `ladet/data`).
+      if (topic === RX_STATUS_TOPIC) {
+        const health = parseRxHealth(msg);
+        if (health) {
+          setRxHealth(health);
+          setRxHealthAt(Date.now());
+        }
+        return;
+      }
       if (topic === PUBLIC_MODE_TOPIC) {
         const mode = parsePublicMode(msg);
         const active = !!mode?.testing && (!mode.until || mode.until > Date.now());
@@ -673,6 +696,16 @@ export default function DashboardPage() {
         <section>
           <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">B — Kualitas Sinyal (QoS)</p>
           <QoSCard rssi={live.rssi} snr={live.snr} delay={live.delay_ms} packetLoss={packetLoss} connected={connected} rxOnline={demo ? true : (rxOnlineEff ? true : (rxOnline === false || (rxSeenAt != null && !rxFresh) ? false : rxOnline))} txOnline={demo ? true : (txOnlineEff ? true : (txOnline === false || (txSeenAt != null && !txFresh) ? false : txOnline))} />
+          {!demo && (
+            <div className="mt-3">
+              <RxHealthCard
+                health={rxHealth}
+                updatedAt={rxHealthAt}
+                nowMs={nowMs}
+                connected={connected}
+              />
+            </div>
+          )}
         </section>
 
         <section>

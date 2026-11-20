@@ -17,6 +17,7 @@ const LADET_TOPIC_LIST = [
   'ladet/config/cmd',        // web → RX (ENGINEER / RUN / MONITOR)
   'ladet/config/public_mode',// web → RX & halaman warga
   'ladet/rx/online',         // LWT / heartbeat RX
+  'ladet/rx/status',         // RX → web (diagnostik: reset, boot count, uptime)
   'ladet/tx/online',         // bukti TX terlihat RX via LoRa
 ];
 

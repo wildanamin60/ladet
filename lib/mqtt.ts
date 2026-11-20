@@ -309,6 +309,13 @@ export const CONFIG_STATUS_TOPIC = 'ladet/config/status';
 export const RX_ONLINE_TOPIC = 'ladet/rx/online';
 export const TX_ONLINE_TOPIC = 'ladet/tx/online';
 
+/**
+ * Diagnostik gateway RX (JSON, non-retained, tiap 1 menit).
+ * Bukan data sensor — dipakai panel engineer untuk melihat kesehatan perangkat:
+ * penyebab reboot terakhir, jumlah boot, uptime, heap, dan kekuatan WiFi.
+ */
+export const RX_STATUS_TOPIC = 'ladet/rx/status';
+
 /** Mode tampilan publik warga (retained agar browser warga baru langsung tahu). */
 export const PUBLIC_MODE_TOPIC = 'ladet/config/public_mode';
 
@@ -372,6 +379,39 @@ export function parsePublicMode(msg: Buffer | string): PublicModeStatus | null {
 export function parseConfigStatus(msg: Buffer | string): ConfigStatus | null {
   try {
     return JSON.parse(typeof msg === 'string' ? msg : msg.toString()) as ConfigStatus;
+  } catch {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Diagnostik gateway RX (ladet/rx/status)                            */
+/* ------------------------------------------------------------------ */
+
+export interface RxHealth {
+  /** POWERON | EXT_RESET | SW_RESTART | PANIC | TASK_WDT | WDT | BROWNOUT | … */
+  reset?: string;
+  /** Jumlah boot sejak NVS dihapus (disimpan firmware di flash) */
+  boot_count?: number;
+  /** Uptime firmware dalam detik */
+  uptime_s?: number;
+  /** Free heap (byte) */
+  heap?: number;
+  /** Kekuatan sinyal WiFi (dBm) */
+  wifi_rssi?: number;
+  /** Spreading factor yang sedang aktif di RX */
+  sf?: number;
+}
+
+export function parseRxHealth(msg: Buffer | string): RxHealth | null {
+  try {
+    const parsed = JSON.parse(typeof msg === 'string' ? msg : msg.toString()) as RxHealth;
+    if (!parsed || typeof parsed !== 'object') return null;
+    // Wajib punya setidaknya satu field yang dikenal, supaya pesan sampah
+    // di topik ini tidak menampilkan kartu kosong.
+    const known = ['reset', 'boot_count', 'uptime_s', 'heap', 'wifi_rssi', 'sf'];
+    if (!known.some((k) => k in parsed)) return null;
+    return parsed;
   } catch {
     return null;
   }
