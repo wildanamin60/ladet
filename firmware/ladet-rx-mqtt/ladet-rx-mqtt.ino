@@ -14,6 +14,8 @@
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>   // Telegram (HTTPS)
+#include <time.h>               // NTP — pengganti RTC
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <LoRa.h>
@@ -59,6 +61,58 @@ const int TOTAL_PACKETS   = 50;   // Harus sama dengan TX
 // #define MQTT_TEST_MODE 1
 
 // ══════════════════════════════════════════════════════════════════════════════
+// AKTUATOR LOKAL (relay) — WAJIB tetap jalan walau WiFi/MQTT mati
+// ══════════════════════════════════════════════════════════════════════════════
+// RX tidak menghitung ulang level: ia memakai field STATUS= yang dikirim TX
+// lewat LoRa. Jadi keputusan tetap di lereng, RX hanya menjalankan relay:
+//
+//   AMAN       → LED hijau
+//   HATI-HATI  → LED kuning
+//   WASPADA    → LED kuning + buzzer waspada
+//   BAHAYA     → LED merah (kanal relay yang sama juga membunyikan buzzer bahaya)
+//
+// ⚠️ CEK PCB DULU — GPIO25 BENTROK:
+//    Di wiring LADET v2, GPIO25 dipakai LoRa MOSI (lihat LORA_MOSI di atas).
+//    Kalau PCB Anda memakai GPIO25 untuk LED merah, berarti jalur MOSI di PCB
+//    BUKAN 25. Ukur/cek jalur: kalau MOSI modul LoRa nyambung ke GPIO23,
+//    ubah LORA_MOSI menjadi 23 dan biarkan PIN_LED_RED = 25.
+//    Jangan biarkan keduanya 25 — relay akan mengganggu SPI dan LoRa gagal baca.
+#define PIN_LED_RED      25   // merah + buzzer BAHAYA (satu kanal relay)
+#define PIN_LED_YELLOW   26
+#define PIN_LED_GREEN    27
+#define PIN_BUZZER       33   // buzzer WASPADA
+
+// Modul relay umum (optocoupler) aktif LOW: IN=LOW → kontak menutup.
+// Kalau relay Anda justru aktif HIGH, ubah angka ini menjadi 0.
+#define RELAY_ACTIVE_LOW 1
+
+// Pin merah yang bentrok dengan jalur LoRa TIDAK boleh ditulis dari program:
+// menulis pin MOSI/SCK/SS akan merusak komunikasi SPI. Selama bentrok, kanal
+// merah (dan buzzer BAHAYA yang menempel di sana) dinonaktifkan dan alasannya
+// dicetak di Serial — lebih baik jujur daripada alarm yang diam-diam mati.
+constexpr bool ACTUATOR_RED_CONFLICT =
+    (PIN_LED_RED == LORA_MOSI) || (PIN_LED_RED == LORA_MISO) ||
+    (PIN_LED_RED == LORA_SCK)  || (PIN_LED_RED == LORA_SS);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TELEGRAM — dikirim dari RX (bukan dashboard) supaya tetap berjalan 24 jam
+// walau tidak ada browser yang membuka dashboard. Hanya bisa terkirim kalau
+// RX punya internet; kalau jaringan mati, pesan disimpan lalu dikirim saat
+// jaringan kembali (maksimal 30 menit).
+// ══════════════════════════════════════════════════════════════════════════════
+// Simpan token & chat id di file `secrets.h` di folder yang sama (tidak ikut
+// Git). Tanpa file itu firmware tetap jalan normal, hanya notifikasi dilewati.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#endif
+#ifndef TELEGRAM_BOT_TOKEN
+  #define TELEGRAM_BOT_TOKEN ""   // isi lewat secrets.h
+#endif
+#ifndef TELEGRAM_CHAT_ID
+  #define TELEGRAM_CHAT_ID  ""
+#endif
+
+// ══════════════════════════════════════════════════════════════════════════════
 // GLOBAL OBJECTS
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -76,7 +130,6 @@ unsigned long lastReconnectAttempt = 0;
 struct SensorData {
   char type[16];
   int seq;
-  char time[32];
   int soil_raw;
   int soil_mv;
   float theta;
@@ -148,7 +201,7 @@ const char* RX_STATUS_TOPIC = "ladet/rx/status";   // JSON diagnostik (non-retai
 uint16_t bootCount = 0;                            // jumlah boot (disimpan di NVS)
 unsigned long lastWifiOkMs = 0;
 unsigned long lastMqttOkMs = 0;
-const unsigned long WIFI_RESTART_MS  = 5UL * 60UL * 1000UL;  // 5 menit
+const unsigned long WIFI_RESTART_MS  = 30UL * 60UL * 1000UL; // 30 menit
 const unsigned long MQTT_RESTART_MS  = 5UL * 60UL * 1000UL;  // 5 menit
 const unsigned long HEALTH_INTERVAL_MS = 60000UL;            // lapor tiap 1 menit
 unsigned long lastHealthMs = 0;
@@ -200,6 +253,210 @@ void safeRestart(const char* reason) {
     delay(300);
   }
   ESP.restart();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WAKTU — pengganti RTC
+   ══════════════════════════════════════════════════════════════════════════
+   TX tidak punya jam dinding (DS3231 dilepas). RX punya WiFi, jadi waktu
+   absolut diambil dari NTP. Kalau internet mati, dipakai uptime — jujur dan
+   tetap bisa dipakai untuk menghitung "berapa menit sebelum jaringan pulih". */
+
+void setupClock() {
+  // WIB = UTC+7. Non-blocking: kalau belum sinkron, nowStamp() memakai uptime.
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
+}
+
+String nowStamp() {
+  time_t t = time(nullptr);
+  if (t > 1700000000) {                 // sudah sinkron (tahun 2023+)
+    struct tm tmBuf;
+    localtime_r(&t, &tmBuf);
+    char buf[24];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmBuf);
+    return String(buf);
+  }
+  return "uptime " + String(millis() / 1000UL) + " s";
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   AKTUATOR LOKAL
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const char* LEVEL_NAME[4] = { "AMAN", "HATI-HATI", "WASPADA", "BAHAYA" };
+int  lastActuatorLevel = -1;      // -1 = belum pernah menerima status
+int  lastAlertLevel    = -1;
+unsigned long lastAlertMs = 0;
+String pendingAlert = "";
+unsigned long pendingAlertAt = 0;
+unsigned long lastTelegramAttemptMs = 0;
+
+/** Tulis satu kanal relay sesuai polaritas modul (aktif LOW pada umumnya). */
+void setRelay(int pin, bool on) {
+#if RELAY_ACTIVE_LOW
+  digitalWrite(pin, on ? LOW : HIGH);
+#else
+  digitalWrite(pin, on ? HIGH : LOW);
+#endif
+}
+
+void setupActuators() {
+  pinMode(PIN_LED_YELLOW, OUTPUT);
+  pinMode(PIN_LED_GREEN, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  // Semua OFF sejak awal supaya relay tidak "klik" saat boot.
+  setRelay(PIN_LED_YELLOW, false);
+  setRelay(PIN_LED_GREEN, false);
+  setRelay(PIN_BUZZER, false);
+  if (!ACTUATOR_RED_CONFLICT) {
+    pinMode(PIN_LED_RED, OUTPUT);
+    setRelay(PIN_LED_RED, false);
+  }
+}
+
+/** "BAHAYA" → 3, "WASPADA" → 2, "HATI-HATI" → 1, "AMAN" → 0, lainnya → -1. */
+int statusToLevel(const char* status) {
+  String s = String(status);
+  s.trim();
+  s.toUpperCase();
+  if (s.startsWith("BAHAYA"))  return 3;
+  if (s.startsWith("WASPADA")) return 2;
+  if (s.startsWith("HATI"))    return 1;
+  if (s.startsWith("AMAN"))    return 0;
+  return -1;    // status tidak dikenal → jangan ubah apa pun
+}
+
+void applyActuators(int level) {
+  if (level < 0) return;
+  setRelay(PIN_LED_GREEN,  level == 0);
+  setRelay(PIN_LED_YELLOW, level == 1 || level == 2);
+  setRelay(PIN_BUZZER,     level == 2);
+  // Kalau pin merah bentrok dengan MOSI LoRa, JANGAN ditulis: menulis pin itu
+  // akan merusak jalur SPI. Relay merah (dan buzzer BAHAYA yang satu kanal)
+  // tidak aktif sampai wiring diperbaiki — lihat WIRING.md.
+  if (!ACTUATOR_RED_CONFLICT) {
+    setRelay(PIN_LED_RED, level == 3);
+  } else if (level == 3) {
+    Serial.println("🚨 BAHAYA, tapi relay MERAH nonaktif: GPIO pin merah = LoRa MOSI. Perbaiki wiring!");
+  }
+  if (level != lastActuatorLevel) {
+    Serial.printf("🔔 AKTUATOR → %s | hijau=%d kuning=%d merah=%d buzzer=%d\n",
+                  LEVEL_NAME[level],
+                  level == 0,
+                  (level == 1 || level == 2),
+                  level == 3,
+                  level == 2);
+    lastActuatorLevel = level;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TELEGRAM (dikirim dari RX)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+String urlEncode(const String& in) {
+  String out;
+  char buf[4];
+  for (size_t i = 0; i < in.length(); i++) {
+    unsigned char c = (unsigned char)in[i];
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += (char)c;
+    } else {
+      snprintf(buf, sizeof(buf), "%%%02X", c);
+      out += buf;
+    }
+  }
+  return out;
+}
+
+bool telegramConfigured() {
+  return strlen(TELEGRAM_BOT_TOKEN) > 10 && strlen(TELEGRAM_CHAT_ID) > 0;
+}
+
+/** Kirim satu pesan ke Telegram. Blocking maks ~5 dtk; hanya saat level berubah. */
+bool sendTelegram(const String& text) {
+  if (!telegramConfigured()) return false;
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  WiFiClientSecure client;
+  client.setInsecure();          // sertifikat tidak diverifikasi — cukup untuk skripsi
+  client.setTimeout(5);          // detik
+  if (!client.connect("api.telegram.org", 443)) {
+    Serial.println("📵 Telegram: gagal konek api.telegram.org");
+    return false;
+  }
+
+  String body = "chat_id=" + urlEncode(TELEGRAM_CHAT_ID) + "&text=" + urlEncode(text);
+  client.print("POST /bot" + String(TELEGRAM_BOT_TOKEN) + "/sendMessage HTTP/1.1\r\n");
+  client.print("Host: api.telegram.org\r\n");
+  client.print("Content-Type: application/x-www-form-urlencoded\r\n");
+  client.print("Content-Length: " + String(body.length()) + "\r\n");
+  client.print("Connection: close\r\n\r\n");
+  client.print(body);
+
+  // Cukup baca baris status ("HTTP/1.1 200 OK").
+  String statusLine;
+  unsigned long t0 = millis();
+  while (client.connected() && millis() - t0 < 5000) {
+    if (!client.available()) { delay(10); continue; }
+    statusLine = client.readStringUntil('\n');
+    break;
+  }
+  client.stop();
+
+  bool ok = statusLine.indexOf(" 200") > 0;
+  Serial.printf("📨 Telegram: %s\n", ok ? "terkirim" : statusLine.c_str());
+  return ok;
+}
+
+/** Simpan pesan; dikirim sekarang kalau ada internet, atau nanti saat pulih. */
+void queueAlert(const String& text) {
+  pendingAlert = text;
+  pendingAlertAt = millis();
+  Serial.println("📮 Notifikasi masuk antrian (dikirim saat internet tersedia)");
+}
+
+/** Dipanggil tiap loop: coba kirim antrian, jangan spam percobaan. */
+void serviceTelegram() {
+  if (pendingAlert.length() == 0) return;
+  if (!telegramConfigured()) { pendingAlert = ""; return; }
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (millis() - pendingAlertAt > 30UL * 60UL * 1000UL) {
+    pendingAlert = "";
+    Serial.println("🗑️ Notifikasi kedaluwarsa (>30 mnt) — dibuang");
+    return;
+  }
+  if (millis() - lastTelegramAttemptMs < 15000UL) return;   // coba tiap 15 dtk
+  lastTelegramAttemptMs = millis();
+  if (sendTelegram(pendingAlert)) pendingAlert = "";
+}
+
+/**
+ * Susun pesan hanya saat level BERUBAH (atau pengingat tiap 5 menit untuk
+ * WASPADA/BAHAYA). Tanpa ini Telegram akan dibanjiri pesan tiap 2 detik.
+ */
+void alertIfNeeded(const struct SensorData& d, int level, int rssi) {
+  // Level turun ke AMAN = alarm selesai. WAJIB menyimpan nilainya, kalau tidak
+  // kejadian berikutnya (AMAN → WASPADA dalam <5 menit) dianggap "bukan baru"
+  // dan notifikasinya tidak terkirim.
+  if (level <= 0) { lastAlertLevel = level; return; }
+  bool isNew  = (level != lastAlertLevel);
+  bool remind = (level >= 2) && (millis() - lastAlertMs > 300000UL);
+  if (!isNew && !remind) return;
+  lastAlertLevel = level;
+  lastAlertMs = millis();
+
+  String msg;
+  msg += (level >= 3) ? "🚨 " : "⚠️ ";
+  msg += "LADET — ";
+  msg += LEVEL_NAME[level];
+  msg += "\nDesa Klungkung, Sukorambi, Jember\n";
+  msg += "Saturasi   : " + String(d.sat * 100.0, 1) + " %\n";
+  msg += "Getaran    : " + String(d.dg, 3) + " Δg\n";
+  msg += "Kemiringan : " + String(d.dth, 2) + "°\n";
+  msg += "Waktu      : " + nowStamp() + "\n";
+  msg += "RSSI       : " + String(rssi) + " dBm";
+  queueAlert(msg);
 }
 
 
@@ -494,8 +751,24 @@ void setup() {
   Serial.printf("  SF       : %d (HARUS sama dengan TX!)\n", LORA_SF);
   Serial.println("═══════════════════════════════════════════════════════════");
   Serial.println();
-  
+
+  // Relay disiapkan SEBELUM WiFi: aktuator tidak boleh bergantung jaringan.
+  setupActuators();
+  Serial.printf("Aktuator       : merah=%d kuning=%d hijau=%d buzzer=%d (%s)\n",
+                PIN_LED_RED, PIN_LED_YELLOW, PIN_LED_GREEN, PIN_BUZZER,
+                RELAY_ACTIVE_LOW ? "relay aktif LOW" : "relay aktif HIGH");
+  if (ACTUATOR_RED_CONFLICT) {
+    Serial.println("⚠️  PERINGATAN BENTROK PIN:");
+    Serial.printf("    PIN_LED_RED (%d) dipakai jalur LoRa (MOSI=%d MISO=%d SCK=%d SS=%d).\n",
+                  PIN_LED_RED, LORA_MOSI, LORA_MISO, LORA_SCK, LORA_SS);
+    Serial.println("    → Kanal MERAH dinonaktifkan sampai wiring diperbaiki.");
+    Serial.println("    → Pindahkan kabel input relay merah ke GPIO32, lalu ubah");
+    Serial.println("      PIN_LED_RED menjadi 32. Detail: firmware/WIRING.md");
+  }
+  Serial.println();
+
   setupWiFi();
+  setupClock();          // NTP — pengganti RTC untuk cap waktu
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setBufferSize(1024);
   mqttClient.setCallback(onMqttMessage);
@@ -585,13 +858,17 @@ void loop() {
     lastMqttOkMs = millis();
   }
   if (millis() - lastWifiOkMs > WIFI_RESTART_MS) {
-    safeRestart("WiFi tidak tersambung > 5 menit");
+    safeRestart("WiFi tidak tersambung > 30 menit");
   }
-  if (millis() - lastMqttOkMs > MQTT_RESTART_MS) {
-    // Broker sedang down juga memicu ini. Reboot tidak memperbaiki broker,
-    // tapi memaksa DNS/TCP handshake baru — dan itu tidak merugikan.
+  if (WiFi.status() == WL_CONNECTED && millis() - lastMqttOkMs > MQTT_RESTART_MS) {
+    // Hanya saat WiFi ADA tapi broker tidak terjangkau: reboot memaksa DNS/TCP
+    // handshake baru. Kalau WiFi-nya sendiri mati (internet desa putus), RX
+    // TIDAK di-reboot — sirine/LED dari LoRa harus tetap hidup berjam-jam.
     safeRestart("MQTT tidak tersambung > 5 menit");
   }
+
+  // Antrian notifikasi Telegram: dicoba kirim terus saat internet tersedia.
+  serviceTelegram();
 
   if (!mqttClient.connected()) {
     unsigned long now = millis();
@@ -846,7 +1123,7 @@ void handleLoRaPacket(int packetSize) {
   Serial.printf("═══════════════════════════════════════════════════════════\n");
   Serial.printf("📨 PAKET %d/%d (SEQ=%d) — %d bytes\n", data.seq, TOTAL_PACKETS, data.seq, packetSize);
   Serial.printf("═══════════════════════════════════════════════════════════\n");
-  Serial.printf(" RSSI: %d dBm | SNR: %.2f dB | RTC: %s\n", rssi, snr, data.time);
+  Serial.printf(" RSSI: %d dBm | SNR: %.2f dB | Waktu: %s\n", rssi, snr, nowStamp().c_str());
   // Detektor desinkron: field SF= di dalam paket ditulis TX sendiri dari
   // variabel activeSF-nya. Kalau berbeda dengan SF radio RX, berarti keduanya
   // tidak sinkron — seharusnya tidak pernah terjadi selama handshake config
@@ -1060,6 +1337,16 @@ void handleLoRaPacket(int packetSize) {
 
   Serial.printf(" 📦 Loss: %.1f%% (%lu/%lu) | 📤 MQTT: ", packetLoss, totalReceived, totalExpected);
 
+  // ── AKTUATOR & NOTIFIKASI LOKAL ──
+  // Dijalankan SEBELUM publishToMQTT dan tanpa syarat koneksi jaringan:
+  // inilah inti "tetap berguna saat internet mati". Keputusan level tetap
+  // milik TX (field STATUS=), RX hanya mengeksekusi relay.
+  {
+    int level = statusToLevel(data.status);
+    applyActuators(level);
+    alertIfNeeded(data, level, rssi);
+  }
+
   publishToMQTT(data, rssi, snr, rxTime, delayMs, packetLoss);
   Serial.printf("═══════════════════════════════════════════════════════════\n");
 }
@@ -1068,7 +1355,6 @@ SensorData parsePacket(String raw) {
   SensorData data;
   strcpy(data.type, "DATA");
   data.seq = 0;
-  strcpy(data.time, "");
   data.soil_raw = 0;
   data.soil_mv = 0;
   data.theta = 0.0;
@@ -1121,7 +1407,7 @@ void parseKeyValue(String token, SensorData &data) {
   
   if (key == "TYPE") value.toCharArray(data.type, sizeof(data.type));
   else if (key == "SEQ") data.seq = value.toInt();
-  else if (key == "TIME") value.toCharArray(data.time, sizeof(data.time));
+  // Field TIME= dari firmware TX lama diabaikan: waktu absolut memakai NTP RX.
   else if (key == "SOIL_RAW") data.soil_raw = value.toInt();
   else if (key == "SOIL_MV") data.soil_mv = value.toInt();
   else if (key == "THETA") data.theta = value.toFloat();
@@ -1164,7 +1450,9 @@ void publishToMQTT(SensorData data, int rssi, float snr, unsigned long rxTime, u
 
   doc["type"] = data.type;
   doc["packet_id"] = data.seq;
-  doc["timestamp"] = data.time;
+  // Cap waktu absolut dari NTP (pengganti RTC). Kalau internet mati, isinya
+  // "uptime N s" — bukan jam palsu 1 Jan 2000.
+  doc["timestamp"] = nowStamp();
   
   JsonObject sensor = doc.createNestedObject("sensor");
   sensor["soil_saturation"] = data.sat * 100.0;

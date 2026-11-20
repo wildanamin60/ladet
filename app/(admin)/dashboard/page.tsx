@@ -13,7 +13,6 @@ import { normalizeLevel, soilLevel, vibrationLevel, tiltLevel, applyCalibration 
 import { generateDemoPayload, generateDemoHistory, resetDemoSequence } from '@/lib/demo';
 import { getMqttClient, parsePayload, publishCmd, publishPublicMode, DEFAULT_MQTT_CONFIG, LADET_TOPICS, CONFIG_STATUS_TOPIC, parseConfigStatus, type ConfigStatus, RX_ONLINE_TOPIC, TX_ONLINE_TOPIC, PUBLIC_MODE_TOPIC, parsePublicMode, RX_STATUS_TOPIC, parseRxHealth, type RxHealth } from '@/lib/mqtt';
 import { insertSensorData } from '@/lib/supabase';
-import { sendLadetAlert } from '@/lib/telegram';
 import type { LadetPayload } from '@/lib/mqtt';
 import type { SensorData } from '@/lib/supabase';
 import type { ChartPoint } from '@/components/RealtimeChart';
@@ -43,14 +42,6 @@ function emptyPayload(): LadetPayload {
     soil_saturation: 0, vibration_freq: 0, tilt_angle: 0,
     rssi: 0, snr: 0, delay_ms: 0, packet_loss: 0, packet_id: 0,
     spreading_factor: 'SF9', distance_m: 100, level: 'aman',
-  };
-}
-
-function getTgCfg() {
-  if (typeof window === 'undefined') return { botToken: '', chatId: '' };
-  return {
-    botToken: localStorage.getItem('tg_bot_token') ?? '',
-    chatId:   localStorage.getItem('tg_chat_id')   ?? '',
   };
 }
 
@@ -132,7 +123,6 @@ export default function DashboardPage() {
     }, remaining);
     return () => clearTimeout(timer);
   }, [publicTesting, publicModeUntil]);
-  const prevLevel = useRef<string>('aman');
   const demoTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mqttRef   = useRef<MqttClient | null>(null);
   const sentRef   = useRef(0);
@@ -166,7 +156,7 @@ export default function DashboardPage() {
     setChartData([]); setTableData([]); setPacketSent(0); setPacketRecv(0);
     sentRef.current = 0; recvRef.current = 0; lastDedupeKeyRef.current = '';
     exportLogRef.current = [];
-    setLive(emptyPayload()); setLastUpdate('—'); prevLevel.current = 'aman';
+    setLive(emptyPayload()); setLastUpdate('—');
   }, []);
 
   const applyPayload = useCallback((p: LadetPayload) => {
@@ -331,27 +321,11 @@ export default function DashboardPage() {
       }
       return [row, ...prev].slice(0, 100);
     });
-    if (p.level !== 'aman' && p.level !== prevLevel.current) {
-      const cfg = getTgCfg();
-      if (cfg.botToken && cfg.chatId) {
-        sendLadetAlert(cfg, {
-          soil_saturation: p.soil_saturation,
-          vibration_freq: p.vibration_freq,
-          tilt_angle: p.tilt_angle,
-          rssi: p.rssi, snr: p.snr, delay_ms: p.delay_ms,
-          spreading_factor: p.spreading_factor,
-          distance_m: p.distance_m,
-          status_level: p.level,
-        }).then(ok => {
-          console.log(ok
-            ? '[Telegram] ✅ Notifikasi berhasil dikirim'
-            : '[Telegram] ❌ Notifikasi gagal dikirim (periksa token, Chat ID, dan /start bot)');
-        }).catch(error => {
-          console.error('[Telegram] ❌ Kesalahan pengiriman:', error);
-        });
-      }
-    }
-    prevLevel.current = p.level;
+    // Notifikasi Telegram TIDAK lagi dikirim dari dashboard.
+    // TX → LoRa → RX, dan RX yang punya internet + relay: di sana notifikasi
+    // dikirim 24 jam walau halaman ini ditutup, dan tetap jalan saat offline
+    // (diAntri lalu dikirim begitu jaringan pulih). Lihat firmware/ladet-rx-mqtt.
+    // Tombol tes manual tetap ada di halaman Pengaturan.
     if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
       insertSensorData({
         node_id: p.node_id,

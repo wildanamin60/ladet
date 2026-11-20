@@ -89,6 +89,11 @@ karena `.env.local` sengaja di-ignore.
   atau pindahkan autentikasi ke server.
 - Supabase dan Telegram bersifat opsional. Tanpa keduanya dashboard tetap
   berjalan lewat MQTT; halaman riwayat akan memakai data demo.
+- **Notifikasi Telegram otomatis dikirim oleh RX**, bukan dashboard — supaya
+  tetap berjalan 24 jam walau halaman ditutup dan tetap antre saat internet
+  putus. Token bot untuk RX disimpan di `firmware/ladet-rx-mqtt/secrets.h`
+  (gitignored), **bukan** di env Vercel. Token di env/localStorage sekarang
+  hanya dipakai tombol **Test Kirim** di `/pengaturan`.
 
 ## 6. Catatan perilaku
 

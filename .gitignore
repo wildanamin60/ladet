@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# firmware secrets — token bot Telegram jangan sampai ke GitHub
+firmware/ladet-rx-mqtt/secrets.h
+
 # vercel
 .vercel
 

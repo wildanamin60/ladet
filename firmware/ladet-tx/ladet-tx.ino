@@ -4,7 +4,8 @@
  * Firmware asli LADET yang sudah teruji.
  * Satu tambahan: MS=millis() untuk delay_ms measurement di RX.
  *
- * Hardware: ESP32 + LoRa SX1278 + ADXL345 + BNO055 + DS3231 + Soil
+ * Hardware: ESP32 + LoRa SX1278 + ADXL345 + BNO055 + Soil
+ * (DS3231/RTC TIDAK dipakai — waktu absolut diisi RX, lihat RX firmware)
  * Wiring LoRa : SCK=18, MISO=19, MOSI=25, SS=5, RST=14, DIO0=4
  * Wiring I2C  : SDA=21, SCL=22
  */
@@ -17,7 +18,6 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL345_U.h>
 #include <Adafruit_BNO055.h>
-#include <RTClib.h>
 #include <Preferences.h>   // simpan SF aktif di flash (NVS) — tahan reset
 #include <esp_system.h>    // esp_reset_reason() — penyebab reboot terakhir
 
@@ -83,7 +83,6 @@ float THETA_S = 0.45;
 
 Adafruit_ADXL345_Unified adxl = Adafruit_ADXL345_Unified(12345);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
-RTC_DS3231 rtc;
 
 // =====================================================
 // BASELINE
@@ -128,7 +127,6 @@ uint16_t monitorSeq = 0;           // nomor urut MONITOR (independen dari SEQ bu
 // =====================================================
 
 struct SensorData {
-  String timestamp;
   int soilRaw;
   int soilmV;
   float thetaMeasured;
@@ -199,15 +197,6 @@ float calculateSaturation(float theta) {
 
 SensorData readSensors() {
   SensorData data;
-
-  // RTC
-  DateTime now = rtc.now();
-  char timeBuffer[25];
-  snprintf(timeBuffer, sizeof(timeBuffer),
-    "%04d-%02d-%02d %02d:%02d:%02d",
-    now.year(), now.month(), now.day(),
-    now.hour(), now.minute(), now.second());
-  data.timestamp = String(timeBuffer);
 
   // SOIL
   data.soilRaw = analogRead(SOIL_PIN);
@@ -288,9 +277,6 @@ void printSensorData(SensorData data) {
   Serial.println("              DATA SENSOR LADET");
   Serial.println("==================================================");
 
-  Serial.print("RTC               : ");
-  Serial.println(data.timestamp);
-
   Serial.println();
   Serial.println("[SOIL MOISTURE]");
   Serial.print("ADC Raw           : "); Serial.println(data.soilRaw);
@@ -342,7 +328,8 @@ String buildPacket(SensorData data) {
   // (nilainya IDENTIK dengan TZ — RX memakai TZ sebagai sudut terukur).
   packet += "TYPE=DATA";
   packet += ",SEQ=";          packet += packetSequence;
-  packet += ",TIME=";         packet += data.timestamp;
+  // Tidak ada field TIME: TX tidak punya RTC. Waktu absolut diisi RX (NTP saat
+  // online, uptime saat offline) — menghemat ~24 byte airtime LoRa.
   packet += ",THETA=";        packet += String(data.thetaMeasured, 3);
   packet += ",THETAR=";       packet += String(data.thetaR, 3);
   packet += ",THETAS=";       packet += String(data.thetaS, 3);
@@ -668,7 +655,7 @@ void takeBaseline() {
 // =====================================================
 // PEMULIHAN DIRI SAAT BOOT
 // =====================================================
-// Sebelumnya tiap inisialisasi yang gagal (RTC/ADXL/BNO/LoRa) berakhir di
+// Sebelumnya tiap inisialisasi yang gagal (ADXL/BNO/LoRa) berakhir di
 // `while (true) { delay(1000); }` — alat diam total sampai listriknya dicabut
 // manual. Delay di dalam loop itu justru MEMBERI MAKAN watchdog, jadi WDT
 // bawaan ESP32 pun tidak bisa menyelamatkan.
@@ -738,9 +725,8 @@ void setup() {
   analogSetPinAttenuation(SOIL_PIN, ADC_11db);
   Serial.println("ADC SOIL        : OK");
 
-  // RTC
-  bootRequire("DS3231", []() { return rtc.begin(); }, 5);
-  Serial.println("RTC             : OK");
+  // RTC: TIDAK DIPAKAI. TX tidak punya jam dinding — waktu absolut diisi RX.
+  // (Komponen DS3231 boleh dilepas; firmware tidak lagi menuntutnya saat boot.)
 
   // ADXL345
   bootRequire("ADXL345", []() { return adxl.begin(); }, 5);
