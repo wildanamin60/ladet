@@ -707,6 +707,13 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  // ✅ MEMBANGUN MODE DEFAULT: Setiap kali TX dinyalakan atau di-reset,
+  // mode akan "dibangun" menjadi MONITOR (continuous real-time).
+  // Ini meng-overide setting ENGINEER sebelumnya sehingga TX tidak "terjebak".
+  engineerMode   = false;
+  monitorEnabled = true;
+  runActive      = true;
+
   Serial.println();
   Serial.println();
   Serial.println("==================================================");
