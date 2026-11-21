@@ -55,18 +55,34 @@ dan **tidak ada** baris `⚠️ DESINKRON`.
 Urutan yang benar: RX mengirim `ACK=<seq>` **sebelum** publish MQTT, jadi
 `MQTT sent` selalu sesudah ACK.
 
-**Ciri penting:** kedua sketch sekarang mencetak denyut hidup:
+**Watchdog loop (baru).** RX memasang Task Watchdog 30 detik. Kalau satu
+iterasi `loop()` tersangkut lebih lama dari itu, ESP32 mencetak:
+
+```
+E (123456) task_wdt: Task watchdog got triggered.
+E (123456) task_wdt: Task name: loopTask
+E (123456) task_wdt: CPU 0: loopTask  (backtrace alamat fungsi yang macet)
+```
+
+lalu **reboot sendiri**. Baris itu adalah bukti langsung di mana program
+berhenti — kirim ke saya apa adanya.
+
+**Denyut hidup:**
 - RX: `⏱️ RX hidup — 8 dtk tanpa paket LoRa (heap ..., WiFi OK, MQTT OK)`
   (hanya muncul saat tidak ada paket, tidak mengganggu log run)
+- RX: `📨 PAKET n/50 ... | heap 250000 B` — heap menurun terus = bocor memori
 - TX: `[TX hidup] SEQ=17 SF=7 mode=RUN/MONITOR heap=...` tiap 10 dtk
+- LCD baris 4 diawali angka detik (`123s -61dBm T:1.1`); angka berhenti
+  bertambah = program RX macet, bukan TX.
 
 Cara membacanya:
 
 | Yang terlihat | Artinya |
 |---|---|
 | RX mencetak `RX hidup … tanpa paket` terus | RX sehat, **TX berhenti mengirim** → cek TX |
-| TX tetap mencetak `[TX hidup]` | TX hidup, cuma tidak ada data masuk → cek radio/antenna |
-| Serial RX **diam total** | RX hang/reset → cabut daya 5 dtk |
+| LCD berubah ke `Status: TX HILANG`, detik tetap jalan | RX sehat, TX/radio yang berhenti |
+| TX tetap mencetak `[TX hidup]` | TX hidup, data tidak sampai → radio/antenna/jarak |
+| Serial RX **diam total**, LCD detik membeku | RX hang → watchdog akan reboot sendiri ≤30 dtk |
 | Serial TX diam tapi RX masih terima paket | **port USB TX mati** (bukan firmware). Tutup Serial Monitor, cabut-pasang kabel USB, pilih port COM lagi |
 
 Port USB ESP32 sering hilang sendiri setelah board reset/brownout: Serial

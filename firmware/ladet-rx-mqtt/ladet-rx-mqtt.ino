@@ -22,7 +22,8 @@
 #include <ArduinoJson.h>
 #include <LoRa.h>
 #include <Preferences.h>   // simpan SF aktif di flash (NVS) — tahan reset
-#include <esp_system.h>    // esp_reset_reason() — penyebab reboot terakhir
+#include <esp_system.h>    // esp_reset_reason() - penyebab reboot terakhir
+#include <esp_task_wdt.h>  // watchdog loop: hang >30 dtk → reboot sendiri
 
 // ══════════════════════════════════════════════════════════════════════════════
 // KONFIGURASI — SESUAIKAN DENGAN SETUP ANDA
@@ -270,6 +271,31 @@ void safeRestart(const char* reason) {
   ESP.restart();
 }
 
+/**
+ * Task Watchdog untuk loop().
+ * Kalau satu iterasi loop tersangkut > 30 detik (I2C macet, WiFi/TCP
+ * memblokir, driver radio), ESP32 akan mencetak "Task watchdog got
+ * triggered" + nama fungsi yang tersangkut, lalu reboot sendiri.
+ * Tanpa ini, alat bisa diam berjam-jam tanpa jejak di Serial.
+ * Dipanggil di AKHIR setup() supaya proses boot (WiFi 15 dtk) tidak dihitung.
+ */
+bool wdtArmed = false;
+void setupLoopWatchdog() {
+  esp_task_wdt_config_t cfg = {};
+  cfg.timeout_ms     = 30000;   // 30 detik
+  cfg.idle_core_mask = 0;       // jangan ikut memantau idle task Arduino
+  cfg.trigger_panic  = true;    // panic → cetak lokasi hang → reboot
+
+  esp_err_t err = esp_task_wdt_reconfigure(&cfg);
+  if (err != ESP_OK) err = esp_task_wdt_init(&cfg);
+
+  // loopTask bisa saja sudah terdaftar oleh core Arduino.
+  esp_err_t addErr = esp_task_wdt_add(NULL);
+  wdtArmed = (err == ESP_OK) && (addErr == ESP_OK || addErr == ESP_ERR_INVALID_ARG);
+  Serial.printf("Watchdog loop  : %s (timeout 30 dtk)\n",
+                wdtArmed ? "aktif" : "TIDAK aktif");
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    WAKTU — pengganti RTC
    ══════════════════════════════════════════════════════════════════════════
@@ -458,12 +484,15 @@ void serviceLcd() {
   }
   lcdLine(1, "Status: " + status);
 
+  // Angka detik di baris 4 terus bertambah = bukti RX masih hidup. Kalau
+  // angkanya berhenti padahal listrik nyala, program RX yang macet.
+  String up = String(millis() / 1000UL) + "s";
   if (lcdLevel >= 0) {
     lcdLine(2, "S:" + String(lcdSat, 1) + "% G:" + String(lcdDg, 2) + "g");
-    lcdLine(3, "T:" + String(lcdTilt, 1) + char(223) + " " + String(lcdRssi) + "dBm");
+    lcdLine(3, up + " " + String(lcdRssi) + "dBm T:" + String(lcdTilt, 1));
   } else {
     lcdLine(2, "S:--  G:--");
-    lcdLine(3, "Menunggu paket LoRa");
+    lcdLine(3, up + " menunggu paket");
   }
 }
 
@@ -936,6 +965,7 @@ void setup() {
   Serial.println("✅ RX Gateway siap!");
   Serial.printf("📡 MQTT Topic: %s\n", MQTT_TOPIC);
   Serial.printf("📍 Test Distance: %d m\n", TEST_DISTANCE_M);
+  setupLoopWatchdog();   // mulai pantau loop SETELAH boot selesai
   
 #ifdef MQTT_TEST_MODE
   Serial.println();
@@ -999,6 +1029,8 @@ void publishTestPacket() {
 #endif
 
 void loop() {
+  if (wdtArmed) esp_task_wdt_reset();   // bukti loop masih berputar
+
   // ── Pemulihan diri (kasus "setengah hidup") ──
   if (WiFi.status() == WL_CONNECTED) lastWifiOkMs = millis();
   if (mqttClient.connected()) {
@@ -1306,7 +1338,7 @@ void handleLoRaPacket(int packetSize) {
 
   Serial.println();
   Serial.printf("═══════════════════════════════════════════════════════════\n");
-  Serial.printf("📨 PAKET %d/%d (SEQ=%d) — %d bytes\n", data.seq, TOTAL_PACKETS, data.seq, packetSize);
+  Serial.printf("📨 PAKET %d/%d (SEQ=%d) — %d bytes | heap %u B\n", data.seq, TOTAL_PACKETS, data.seq, packetSize, (unsigned)ESP.getFreeHeap());
   Serial.printf("═══════════════════════════════════════════════════════════\n");
   Serial.printf(" RSSI: %d dBm | SNR: %.2f dB | Waktu: %s\n", rssi, snr, nowStamp().c_str());
   // Detektor desinkron: field SF= di dalam paket ditulis TX sendiri dari
