@@ -922,6 +922,9 @@ void setup() {
   Serial.println();
   Serial.printf("Reset terakhir : %s\n", resetReasonName());
   Serial.printf("Boot ke-       : %u\n", bootCount);
+  // Penanda versi: memastikan board benar-benar menjalankan sketch yang baru
+  // di-upload (bukan firmware lama yang masih tersimpan).
+  Serial.printf("Firmware build : %s %s\n", __DATE__, __TIME__);
   Serial.println();
   Serial.println("TEST CONFIGURATION:");
   Serial.printf("  Distance : %d m\n", TEST_DISTANCE_M);
