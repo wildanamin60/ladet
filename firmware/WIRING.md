@@ -135,9 +135,12 @@ benar-benar terisolasi dan Anda paham risikonya.
 ESP32 (dari USB) tidak sanggup dan bisa brownout. Pakai adaptor 5 V 1–2 A
 terpisah. Ini juga melindungi RX supaya tidak reboot saat semua relay menyala.
 
-**Polaritas:** firmware menganggap relay **aktif LOW** (`RELAY_ACTIVE_LOW 1`).
-Kalau relay Anda justru menyala saat IN diberi HIGH, ubah satu baris di
-`ladet-rx-mqtt.ino` menjadi `#define RELAY_ACTIVE_LOW 0`.
+**Polaritas:** modul relay Anda sudah diuji dengan
+`firmware/tools/relay-test/` dan terbukti **aktif HIGH** (HIGH = ON).
+Karena itu firmware diset `#define RELAY_ACTIVE_LOW 0`.
+
+Kalau suatu saat modul diganti dengan tipe aktif LOW, ubah menjadi `1`.
+Ciri modul aktif LOW: relay justru menyala saat pin diberi LOW.
 
 ### LCD 20x4 I2C
 

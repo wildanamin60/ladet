@@ -95,13 +95,11 @@ const int TOTAL_PACKETS   = 50;   // Harus sama dengan TX
 // Modul relay umum (optocoupler) aktif LOW: IN=LOW → kontak menutup.
 // Kalau relay Anda justru aktif HIGH, ubah angka ini menjadi 0.
 //
-// ⚠️ GEJALA: SEMUA relay nyala begitu board diberi daya (tanpa TX, tanpa data)
-//    Berarti pin OFF sedang dibaca modul sebagai ON. Dua penyebab:
-//    a) modul AKTIF HIGH  → ubah angka ini menjadi 0
-//    b) modul 5 V aktif LOW tapi sinyal 3.3 V tidak cukup mematikannya
-//       → VCC logika modul ke 3.3 V, JD-VCC ke 5 V (lepas jumper), GND tetap satu
-//    Cara memastikan: upload `firmware/tools/relay-test/relay-test.ino`.
-#define RELAY_ACTIVE_LOW 1
+// ⚠️ MODUL ANDA SUDAH DIUJI: AKTIF HIGH (HIGH = relay ON, LOW = OFF).
+// Itulah sebabnya semua relay menyala saat boot ketika nilainya masih 1:
+// firmware menulis HIGH untuk "OFF", tapi modul membacanya sebagai ON.
+// Kalau suatu saat modul relay diganti dengan tipe aktif LOW, ubah ke 1.
+#define RELAY_ACTIVE_LOW 0
 
 // Pin merah yang bentrok dengan jalur LoRa TIDAK boleh ditulis dari program:
 // menulis pin MOSI/SCK/SS akan merusak komunikasi SPI. Selama bentrok, kanal
