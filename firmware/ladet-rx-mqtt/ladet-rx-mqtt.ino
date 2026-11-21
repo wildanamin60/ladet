@@ -305,6 +305,7 @@ unsigned long lastAlertMs = 0;
 String pendingAlert = "";
 unsigned long pendingAlertAt = 0;
 unsigned long lastTelegramAttemptMs = 0;
+unsigned long telegramRetryMs = 15000UL;   // backoff: 15→30→60→120 dtk saat gagal
 
 // ── LCD 20x4 ──
 LiquidCrystal_I2C* lcd = nullptr;     // null = LCD tidak terpasang/tidak ketemu
@@ -489,16 +490,28 @@ bool telegramConfigured() {
   return strlen(TELEGRAM_BOT_TOKEN) > 10 && strlen(TELEGRAM_CHAT_ID) > 0;
 }
 
-/** Kirim satu pesan ke Telegram. Blocking maks ~5 dtk; hanya saat level berubah. */
+/** Kirim satu pesan ke Telegram. Blocking dibatasi ketat; hanya saat level berubah. */
 bool sendTelegram(const String& text) {
   if (!telegramConfigured()) return false;
   if (WiFi.status() != WL_CONNECTED) return false;
 
   WiFiClientSecure client;
-  client.setInsecure();          // sertifikat tidak diverifikasi — cukup untuk skripsi
-  client.setTimeout(5);          // detik
+  client.setInsecure();                 // sertifikat tidak diverifikasi — cukup untuk skripsi
+
+  // ⚠️ PENTING: nilai ini dalam MILIDETIK (bukan detik). Dulu `setTimeout(5)`
+  // berarti TCP connect hanya diberi 5 ms → Telegram selalu gagal konek.
+  client.setConnectionTimeout(2500);    // TCP connect maks 2,5 dtk
+  client.setTimeout(2500);              // baca/tulis maks 2,5 dtk
+  // TLS handshake default 120 dtk — inilah yang bisa membekukan seluruh loop
+  // (LoRa tidak didengarkan selama itu). Dibatasi 6 dtk.
+  client.setHandshakeTimeout(6);
+
+  Serial.printf("📨 Telegram: menghubungi api.telegram.org... (heap %u B)\n",
+                (unsigned)ESP.getFreeHeap());
+  unsigned long tConnect = millis();
   if (!client.connect("api.telegram.org", 443)) {
-    Serial.println("📵 Telegram: gagal konek api.telegram.org");
+    Serial.printf("📵 Telegram: gagal konek api.telegram.org setelah %lu ms\n",
+                  millis() - tConnect);
     return false;
   }
 
@@ -521,12 +534,19 @@ bool sendTelegram(const String& text) {
   client.stop();
 
   bool ok = statusLine.indexOf(" 200") > 0;
-  Serial.printf("📨 Telegram: %s\n", ok ? "terkirim" : statusLine.c_str());
+  Serial.printf("📨 Telegram: %s (%lu ms, heap %u B)\n",
+                ok ? "terkirim" : statusLine.c_str(),
+                millis() - tConnect, (unsigned)ESP.getFreeHeap());
   return ok;
 }
 
 /** Simpan pesan; dikirim sekarang kalau ada internet, atau nanti saat pulih. */
 void queueAlert(const String& text) {
+  if (!telegramConfigured()) {
+    Serial.println("📵 Telegram belum diisi: salin secrets.example.h → secrets.h "
+                   "lalu isi TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID");
+    return;
+  }
   pendingAlert = text;
   pendingAlertAt = millis();
   Serial.println("📮 Notifikasi masuk antrian (dikirim saat internet tersedia)");
@@ -542,9 +562,15 @@ void serviceTelegram() {
     Serial.println("🗑️ Notifikasi kedaluwarsa (>30 mnt) — dibuang");
     return;
   }
-  if (millis() - lastTelegramAttemptMs < 15000UL) return;   // coba tiap 15 dtk
+  if (millis() - lastTelegramAttemptMs < telegramRetryMs) return;
   lastTelegramAttemptMs = millis();
-  if (sendTelegram(pendingAlert)) pendingAlert = "";
+  if (sendTelegram(pendingAlert)) {
+    pendingAlert = "";
+    telegramRetryMs = 15000UL;        // sukses → irama normal
+  } else if (telegramRetryMs < 120000UL) {
+    telegramRetryMs *= 2;             // gagal → backoff, jangan makan waktu loop
+    Serial.printf("⏳ Telegram gagal — coba lagi %lu dtk lagi\n", telegramRetryMs / 1000UL);
+  }
 }
 
 /**
@@ -989,11 +1015,22 @@ void loop() {
     safeRestart("MQTT tidak tersambung > 5 menit");
   }
 
-  // Antrian notifikasi Telegram: dicoba kirim terus saat internet tersedia.
-  serviceTelegram();
+  // Antrian notifikasi Telegram & LCD dijalankan SETELAH paket LoRa diproses
+  // (lihat akhir loop) supaya TLS Telegram yang lambat tidak menunda ACK/alarm.
 
-  // Layar 20x4: status level + WiFi + nilai sensor terakhir.
-  serviceLcd();
+  // ── Detektor loop macet (diagnostik) ──
+  // Kalau satu iterasi loop memakan > 1,5 dtk, hampir pasti ada panggilan
+  // jaringan yang memblokir (DNS/TLS Telegram, MQTT, NTP). Baris ini membuat
+  // penyebabnya terlihat di Serial, bukan cuma "tiba-tiba berhenti".
+  static unsigned long lastLoopMs = 0;
+  unsigned long nowLoop = millis();
+  if (lastLoopMs != 0 && nowLoop - lastLoopMs > 1500UL) {
+    Serial.printf("⚠️  Loop tertahan %lu ms (heap %u B, WiFi %s, MQTT %s)\n",
+                  nowLoop - lastLoopMs, (unsigned)ESP.getFreeHeap(),
+                  WiFi.status() == WL_CONNECTED ? "OK" : "putus",
+                  mqttClient.connected() ? "OK" : "putus");
+  }
+  lastLoopMs = nowLoop;
 
   if (!mqttClient.connected()) {
     unsigned long now = millis();
@@ -1043,6 +1080,11 @@ void loop() {
     handleLoRaPacket(packetSize);
   }
 #endif
+
+  // Baru setelah paket LoRa dilayani: antrian Telegram & layar. Kalau TLS
+  // Telegram lambat, ACK paket berikutnya tetap terkirim tepat waktu.
+  serviceTelegram();
+  serviceLcd();
 }
 
 void setupWiFi() {

@@ -50,5 +50,22 @@ Dashboard → panel **Skenario Pengujian** → klik SF/jarak → **Ya, terapkan*
 Bukti fisik di Serial: TX `⚙️ CONFIG: SF x -> y TER-APPLY`, RX `✅ TX konfirmasi → SF RX aktif: y`,
 dan **tidak ada** baris `⚠️ DESINKRON`.
 
+## Kalau RX "berhenti" di tengah run
+
+Urutan yang benar: RX mengirim `ACK=<seq>` **sebelum** publish MQTT, jadi
+`MQTT sent` selalu sesudah ACK. Kalau baris `📨 PAKET` tiba-tiba hilang,
+periksa dua hal dulu:
+
+1. **TX masih mengirim?** Lihat Serial TX. Kalau tidak ada baris `LORA TX`,
+   masalahnya di TX (mode ENGINEER standby, atau board reset), bukan di RX.
+2. **Ada baris `⚠️ Loop tertahan N ms`?** RX mencetak ini kalau satu iterasi
+   loop memakan >1,5 dtk. Artinya ada panggilan jaringan yang memblokir —
+   hampir selalu Telegram/DNS. Sejak perbaikan ini Telegram dibatasi
+   (`connect` 2,5 dtk, TLS 6 dtk, baca 2,5 dtk) dan dicoba dengan backoff
+   15→30→60→120 dtk, jadi tidak bisa lagi membekukan LoRa.
+
+Kalau RX benar-benar diam total (tidak ada banner boot berulang, LCD beku),
+cabut daya RX 5 dtk lalu pasang lagi; kirim 20 baris terakhir Serial-nya.
+
 ## Folder lain
 - `_arsip\` — versi firmware lama & dokumen kerja. **Bukan untuk di-upload.**
