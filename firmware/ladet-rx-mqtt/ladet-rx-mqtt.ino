@@ -1032,6 +1032,24 @@ void loop() {
   }
   lastLoopMs = nowLoop;
 
+  // ── Denyut "RX masih hidup" ──
+  // Hanya dicetak saat TIDAK ada paket LoRa, supaya tidak mengganggu log run.
+  // Gunanya: membedakan "TX berhenti mengirim" dari "RX mati/hang".
+  // Kalau baris ini terus muncul → RX sehat, masalahnya di TX atau radio.
+  // Kalau Serial benar-benar diam → RX hang/reset (atau kabel USB lepas).
+  static unsigned long lastAliveMs = 0;
+  if (millis() - lastAliveMs > 5000UL) {
+    lastAliveMs = millis();
+    bool silent = (lastLoRaRxMs == 0) || (millis() - lastLoRaRxMs > 6000UL);
+    if (silent) {
+      unsigned long silentSec = (millis() - lastLoRaRxMs) / 1000UL;
+      Serial.printf("⏱️  RX hidup — %lu dtk tanpa paket LoRa (heap %u B, WiFi %s, MQTT %s)\n",
+                    silentSec, (unsigned)ESP.getFreeHeap(),
+                    WiFi.status() == WL_CONNECTED ? "OK" : "putus",
+                    mqttClient.connected() ? "OK" : "putus");
+    }
+  }
+
   if (!mqttClient.connected()) {
     unsigned long now = millis();
     if (now - lastReconnectAttempt > 5000) {

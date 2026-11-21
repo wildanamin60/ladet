@@ -802,6 +802,19 @@ void setup() {
 // =====================================================
 
 void loop() {
+  // ── Denyut "TX masih hidup" ──
+  // Dicetak tiap 10 dtk. Kalau Serial berhenti menampilkan baris ini padahal
+  // board tetap diberi daya, berarti firmware TX benar-benar berhenti
+  // (bukan cuma "menunggu ACK"): kirim 20 baris terakhir ke saya.
+  static unsigned long lastAliveMs = 0;
+  if (millis() - lastAliveMs > 10000UL) {
+    lastAliveMs = millis();
+    Serial.printf("[TX hidup] SEQ=%d SF=%d mode=%s heap=%u B\n",
+                  packetSequence, activeSF,
+                  (engineerMode && !runActive) ? "ENGINEER-standby" : "RUN/MONITOR",
+                  (unsigned)ESP.getFreeHeap());
+  }
+
   if (engineerMode && !runActive) {
     LoRa.receive();
     checkConfig();
