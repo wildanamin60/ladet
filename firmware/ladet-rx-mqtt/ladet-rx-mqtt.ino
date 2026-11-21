@@ -16,6 +16,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>   // Telegram (HTTPS)
 #include <time.h>               // NTP — pengganti RTC
+#include <Wire.h>               // I2C untuk LCD 20x4 (PCF8574)
+#include <LiquidCrystal_I2C.h>  // LCD I2C 20x4
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <LoRa.h>
@@ -81,6 +83,14 @@ const int TOTAL_PACKETS   = 50;   // Harus sama dengan TX
 #define PIN_LED_YELLOW   26
 #define PIN_LED_GREEN    27
 #define PIN_BUZZER       33   // buzzer WASPADA
+
+// LCD 20x4 I2C (backpack PCF8574, 4 pin: VCC GND SDA SCL).
+// Alamat TIDAK di-hardcode: dicari otomatis saat boot (0x27/0x3F/0x20–0x27).
+// Kalau LCD tidak terpasang, firmware tetap jalan normal tanpa layar.
+#define LCD_SDA          21
+#define LCD_SCL          22
+#define LCD_COLS         20
+#define LCD_ROWS         4
 
 // Modul relay umum (optocoupler) aktif LOW: IN=LOW → kontak menutup.
 // Kalau relay Anda justru aktif HIGH, ubah angka ini menjadi 0.
@@ -298,6 +308,17 @@ String pendingAlert = "";
 unsigned long pendingAlertAt = 0;
 unsigned long lastTelegramAttemptMs = 0;
 
+// ── LCD 20x4 ──
+LiquidCrystal_I2C* lcd = nullptr;     // null = LCD tidak terpasang/tidak ketemu
+uint8_t  lcdAddrFound = 0;
+String   lcdCache[LCD_ROWS];          // isi terakhir per baris (hindari flicker)
+float    lcdSat = 0.0;
+float    lcdDg = 0.0;
+float    lcdTilt = 0.0;
+int      lcdRssi = 0;
+int      lcdLevel = -1;               // -1 = belum pernah terima paket
+unsigned long lastLcdMs = 0;
+
 /** Tulis satu kanal relay sesuai polaritas modul (aktif LOW pada umumnya). */
 void setRelay(int pin, bool on) {
 #if RELAY_ACTIVE_LOW
@@ -354,6 +375,96 @@ void applyActuators(int level) {
                   level == 3,
                   level == 2);
     lastActuatorLevel = level;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LCD 20x4 I2C
+   ══════════════════════════════════════════════════════════════════════════
+   Baris 1: identitas + status WiFi
+   Baris 2: level bahaya terakhir dari TX
+   Baris 3: saturasi tanah + getaran
+   Baris 4: kemiringan + RSSI
+
+   Semua kegagalan LCD bersifat opsional: kalau layar tidak terpasang, tidak
+   ada alamat yang menjawab, atau kabel I2C lepas, firmware tetap jalan dan
+   relay/Telegram tidak terpengaruh. */
+
+/** Cari alamat backpack PCF8574: 0x27/0x3F paling umum, lalu scan 0x08–0x77. */
+uint8_t scanLcdAddress() {
+  const uint8_t umum[] = { 0x27, 0x3F, 0x20, 0x26, 0x38, 0x3E };
+  for (uint8_t i = 0; i < sizeof(umum); i++) {
+    Wire.beginTransmission(umum[i]);
+    if (Wire.endTransmission() == 0) return umum[i];
+  }
+  for (uint8_t a = 0x08; a < 0x78; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) return a;
+  }
+  return 0;
+}
+
+/** Tulis satu baris lengkap 20 karakter; dilewati kalau isinya sama. */
+void lcdLine(uint8_t row, const String& text) {
+  if (!lcd) return;
+  String t = text;
+  if (t.length() > LCD_COLS) t = t.substring(0, LCD_COLS);
+  while (t.length() < LCD_COLS) t += ' ';
+  if (lcdCache[row] == t) return;
+  lcdCache[row] = t;
+  lcd->setCursor(0, row);
+  lcd->print(t);
+}
+
+void setupLCD() {
+  Wire.begin(LCD_SDA, LCD_SCL);
+  lcdAddrFound = scanLcdAddress();
+  if (lcdAddrFound == 0) {
+    Serial.printf("LCD 20x4       : tidak ditemukan (SDA=%d SCL=%d) — dilewati\n",
+                  LCD_SDA, LCD_SCL);
+    return;
+  }
+  lcd = new LiquidCrystal_I2C(lcdAddrFound, LCD_COLS, LCD_ROWS);
+  lcd->begin(LCD_COLS, LCD_ROWS);
+  lcd->backlight();
+  lcd->clear();
+  for (uint8_t i = 0; i < LCD_ROWS; i++) lcdCache[i] = "";
+  Serial.printf("LCD 20x4       : OK di alamat 0x%02X (SDA=%d SCL=%d)\n",
+                lcdAddrFound, LCD_SDA, LCD_SCL);
+
+  lcdLine(0, "LADET RX  WiFi:--");
+  lcdLine(1, "Status: MENUNGGU TX");
+  lcdLine(2, "S:--  G:--");
+  lcdLine(3, "Menunggu paket LoRa");
+}
+
+/** Dipanggil tiap loop; hanya menulis ulang kalau isi baris berubah. */
+void serviceLcd() {
+  if (!lcd) return;
+  if (millis() - lastLcdMs < 500UL) return;
+  lastLcdMs = millis();
+
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  lcdLine(0, String("LADET RX  WiFi:") + (wifiOk ? "OK" : "--"));
+
+  String status;
+  if (lcdLevel < 0) {
+    status = "MENUNGGU TX";
+  } else if (lastLoRaRxMs == 0 || millis() - lastLoRaRxMs > 30000UL) {
+    // Relay tetap memegang level terakhir (disengaja demi keselamatan), tapi
+    // layar jujur bilang TX sudah tidak mengirim.
+    status = "TX HILANG";
+  } else {
+    status = LEVEL_NAME[lcdLevel];
+  }
+  lcdLine(1, "Status: " + status);
+
+  if (lcdLevel >= 0) {
+    lcdLine(2, "S:" + String(lcdSat, 1) + "% G:" + String(lcdDg, 2) + "g");
+    lcdLine(3, "T:" + String(lcdTilt, 1) + char(223) + " " + String(lcdRssi) + "dBm");
+  } else {
+    lcdLine(2, "S:--  G:--");
+    lcdLine(3, "Menunggu paket LoRa");
   }
 }
 
@@ -779,6 +890,7 @@ void setup() {
   }
   Serial.println();
 
+  setupLCD();            // LCD 20x4 I2C (opsional; tidak menghambat relay)
   setupWiFi();
   setupClock();          // NTP — pengganti RTC untuk cap waktu
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
@@ -881,6 +993,9 @@ void loop() {
 
   // Antrian notifikasi Telegram: dicoba kirim terus saat internet tersedia.
   serviceTelegram();
+
+  // Layar 20x4: status level + WiFi + nilai sensor terakhir.
+  serviceLcd();
 
   if (!mqttClient.connected()) {
     unsigned long now = millis();
@@ -1357,6 +1472,11 @@ void handleLoRaPacket(int packetSize) {
     int level = statusToLevel(data.status);
     applyActuators(level);
     alertIfNeeded(data, level, rssi);
+    lcdLevel = level;
+    lcdSat   = data.sat * 100.0;
+    lcdDg    = data.dg;
+    lcdTilt  = data.dth;
+    lcdRssi  = rssi;
   }
 
   publishToMQTT(data, rssi, snr, rxTime, delayMs, packetLoss);

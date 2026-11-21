@@ -17,6 +17,8 @@ ESP32 + LoRa SX1278 + WiFi (MQTT ke broker → dashboard) + relay aktuator.
 - Terima paket → hitung delay (RTT/kalibrasi) & packet loss (gap SEQ) → publish `ladet/data`
 - **Aktuator lokal** (tetap jalan tanpa internet): hijau=27 (`AMAN`),
   kuning=26 (`HATI-HATI`/`WASPADA`), merah=25 (`BAHAYA`), buzzer=33 (`WASPADA`)
+- **LCD 20x4 I2C** (SDA=21, SCL=22): status level, WiFi, nilai sensor terakhir;
+  alamat I2C dicari otomatis, LCD opsional (tanpa LCD tetap jalan)
 - **Telegram dikirim dari RX** (bukan dashboard), antri maks 30 menit saat offline
 - Cap waktu: NTP (WIB) → fallback `uptime N s` kalau internet mati
 - Subscribe config web (`ladet/config/sf|distance`) + handshake `TYPE=CONF` ke TX
@@ -25,7 +27,7 @@ ESP32 + LoRa SX1278 + WiFi (MQTT ke broker → dashboard) + relay aktuator.
 - Telegram: salin `secrets.example.h` → `secrets.h`, isi token + chat id
   (`secrets.h` tidak ikut Git)
 - ⚠️ WiFi, broker, dan wiring **SUDAH terisi sesuai hardware-mu**
-  (WiFi `Alieeen3`, **MOSI=25** — sama dengan TX) — jangan ditimpa file dari tempat lain
+  (WiFi `Alieeen3`, **MOSI RX=23**, **MOSI TX=25**) — jangan ditimpa file dari tempat lain
 - ⚠️ **GPIO25 bentrok** dengan relay merah — baca `WIRING.md` sebelum memasang relay
 
 ## Pin lengkap

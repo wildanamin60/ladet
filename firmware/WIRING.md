@@ -86,12 +86,11 @@ BNO055: alamat I2C `0x28`.
 | GND | GND |
 
 ### Modul relay 4 kanal (aktuator)
-
 | Kanal | Fungsi | GPIO | Perilaku |
 |---|---|---|---|
 | CH1 | LED hijau | **27** | menyala saat `AMAN` |
 | CH2 | LED kuning | **26** | menyala saat `HATI-HATI` dan `WASPADA` |
-| CH3 | LED merah + buzzer BAHAYA (satu kanal) | **25** ⚠️ | menyala saat `BAHAYA` |
+| CH3 | LED merah + buzzer BAHAYA (satu kanal) | **25** | menyala saat `BAHAYA` |
 | CH4 | Buzzer WASPADA | **33** | menyala saat `WASPADA` saja |
 
 Logika yang dijalankan RX (dari field `STATUS=` kiriman TX lewat LoRa):
@@ -114,7 +113,7 @@ Modul relay 4 kanal yang umum dipakai (optocoupler, aktif **LOW**):
 |---|---|---|
 | `IN1` | GPIO 27 | LED hijau |
 | `IN2` | GPIO 26 | LED kuning |
-| `IN3` | GPIO 25 ⚠️ | LED merah + buzzer bahaya |
+| `IN3` | GPIO 25 | LED merah + buzzer bahaya |
 | `IN4` | GPIO 33 | buzzer waspada |
 | `GND` (sisi logika) | GND ESP32 | **wajib satu GND** |
 | `VCC` | **5 V terpisah** | jangan ambil dari pin 3.3 V ESP32 |
@@ -139,6 +138,35 @@ terpisah. Ini juga melindungi RX supaya tidak reboot saat semua relay menyala.
 **Polaritas:** firmware menganggap relay **aktif LOW** (`RELAY_ACTIVE_LOW 1`).
 Kalau relay Anda justru menyala saat IN diberi HIGH, ubah satu baris di
 `ladet-rx-mqtt.ino` menjadi `#define RELAY_ACTIVE_LOW 0`.
+
+### LCD 20x4 I2C
+
+| Pin LCD (backpack) | Sambung ke | Catatan |
+|---|---|---|
+| `VCC` | 5 V | boleh dari adaptor relay 5 V, arus ±25 mA |
+| `GND` | GND | satu titik dengan GND ESP32 |
+| `SDA` | **GPIO 21** | bebas, tidak bentrok dengan LoRa/relay |
+| `SCL` | **GPIO 22** | |
+
+- Modul yang dipakai: backpack **PCF8574** (4 pin), ukuran **20 kolom × 4 baris**.
+- **Alamat I2C dicari otomatis** saat boot (0x27, 0x3F, lalu scan 0x08–0x77),
+  jadi Anda tidak perlu tahu alamatnya.
+- Serial akan mencetak `LCD 20x4 : OK di alamat 0x27` atau
+  `tidak ditemukan` bila kabel/backpack bermasalah.
+- Kalau layar menyala tapi tidak ada tulisan, putar **potensiometer kontras**
+  di belakang backpack.
+
+Isi layar saat berjalan:
+
+```
+LADET RX  WiFi:OK
+Status: WASPADA
+S:72.5% G:0.12g
+T:4.3° -87dBm
+```
+
+Baris 2 berubah jadi `TX HILANG` bila 30 detik tidak ada paket LoRa; relay
+tetap memegang level terakhir (disengaja demi keselamatan).
 
 ## 🚨 Semua relay nyala saat boot (tanpa TX) — cara mendiagnosa
 
@@ -183,64 +211,28 @@ membuat relay "tidak mau mati".
 
 ---
 
-## ⚠️ GPIO 25 bentrok — wajib dicek
+## Pin LoRa TX dan RX BERBEDA (sudah dikonfirmasi di PCB)
 
-Di firmware, **GPIO 25 dipakai LoRa MOSI**:
+| Board | MOSI | Keterangan |
+|---|---|---|
+| **TX** | **25** | hanya LoRa, tidak ada aktuator |
+| **RX** | **23** | GPIO25 dipakai relay LED merah + buzzer BAHAYA |
 
 ```cpp
+// ladet-tx.ino
 #define LORA_MOSI    25
-#define PIN_LED_RED  25   // ← angka yang sama
+
+// ladet-rx-mqtt.ino
+#define LORA_MOSI    23
+#define PIN_LED_RED  25
 ```
 
-Satu GPIO tidak bisa menjadi MOSI SPI **dan** output relay sekaligus. Kalau
-dipaksa, salah satu pasti rusak: relay akan mengikuti sinyal SPI (klik cepat
-tiap byte) atau LoRa gagal baca register.
+SCK/MISO/NSS/RST/DIO0 tetap sama di kedua board (18/19/5/14/4).
 
-Karena itu firmware sekarang:
-
-- mencetak peringatan besar saat boot,
-- **tidak menulis** pin merah selama bentrok (supaya SPI tidak dirusak),
-- sehingga kanal merah + buzzer BAHAYA **nonaktif** sampai wiring diperbaiki.
-  LED kuning, LED hijau, buzzer waspada, dan Telegram tetap jalan.
-
-### Cara memastikan MOSI LoRa Anda sebenarnya di pin berapa
-
-1. **Lihat jalur PCB**: telusuri dari pin `MOSI` modul LoRa ke kaki ESP32.
-   Kalau nyambung ke GPIO **25**, berarti kode sudah benar dan relay merah
-   tidak boleh di 25.
-2. **Ukur dengan multimeter (kontinuitas)**: mode buzzer, satu probe di pin
-   MOSI modul, probe lain di kaki GPIO ESP32. Yang berbunyi itulah pin aslinya.
-3. **Cek silkscreen/header**: kalau PCB menamai header aktuator "25", cek
-   apakah label itu memang GPIO25 atau hanya nomor urut kanal.
-
-### Dua pilihan perbaikan (pilih salah satu)
-
-**Pilihan A — pindahkan kabel relay merah (paling mudah, tanpa ubah PCB):**
-
-```
-Kabel IN3 relay: GPIO25  →  GPIO32
-```
-
-Lalu di `ladet-rx-mqtt.ino`:
-
-```cpp
-#define PIN_LED_RED  32     // was 25
-```
-
-GPIO32 bebas, bukan input-only, dan tidak dipakai LoRa/Serial.
-
-**Pilihan B — kalau hasil ukur menunjukkan MOSI LoRa sebenarnya di GPIO23:**
-
-```cpp
-#define LORA_MOSI    23     // di TX *dan* RX
-#define PIN_LED_RED  25     // tetap sesuai PCB
-```
-
-Ini hanya benar kalau jalur tembaga PCB memang ke GPIO23. Kalau tidak,
-LoRa akan mati total — jadi **ukur dulu, jangan menebak**.
-
-Setelah salah satu diterapkan: compile ulang, upload ulang **kedua** board
-(jika LORA_MOSI diubah), lalu cek Serial RX — peringatan bentrok harus hilang.
+Jangan menyamakan `LORA_MOSI` RX dengan TX: kalau RX memakai 25, pin relay
+merah bertabrakan dengan jalur SPI dan LoRa gagal baca register. Firmware
+menjaga ini otomatis — `ACTUATOR_RED_CONFLICT` akan mematikan kanal merah dan
+mencetak peringatan kalau suatu saat angkanya kembali bentrok.
 
 ---
 
