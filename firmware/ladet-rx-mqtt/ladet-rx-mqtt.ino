@@ -41,7 +41,7 @@ const char* MQTT_TOPIC  = "ladet/data";
 // LoRa Pins — LADET Wiring (harus sama dengan TX)
 #define LORA_SCK   18
 #define LORA_MISO  19
-#define LORA_MOSI  25   // LADET v2 — harus sama dengan wiring TX (GPIO25)
+#define LORA_MOSI  23   // RX: GPIO23 — BEDA dengan TX! GPIO25 di RX dipakai relay LED merah
 #define LORA_SS     5
 #define LORA_RST   14
 #define LORA_DIO0   4   // PENTING: GPIO4, bukan GPIO2
@@ -71,12 +71,12 @@ const int TOTAL_PACKETS   = 50;   // Harus sama dengan TX
 //   WASPADA    → LED kuning + buzzer waspada
 //   BAHAYA     → LED merah (kanal relay yang sama juga membunyikan buzzer bahaya)
 //
-// ⚠️ CEK PCB DULU — GPIO25 BENTROK:
-//    Di wiring LADET v2, GPIO25 dipakai LoRa MOSI (lihat LORA_MOSI di atas).
-//    Kalau PCB Anda memakai GPIO25 untuk LED merah, berarti jalur MOSI di PCB
-//    BUKAN 25. Ukur/cek jalur: kalau MOSI modul LoRa nyambung ke GPIO23,
-//    ubah LORA_MOSI menjadi 23 dan biarkan PIN_LED_RED = 25.
-//    Jangan biarkan keduanya 25 — relay akan mengganggu SPI dan LoRa gagal baca.
+// ⚠️ PIN LoRa RX BERBEDA DENGAN TX (sudah dikonfirmasi lewat PCB):
+//    TX : MOSI = GPIO25  (tidak ada aktuator)
+//    RX : MOSI = GPIO23  (GPIO25 dipakai relay LED merah + buzzer BAHAYA)
+//    SCK/MISO/NSS/RST/DIO0 tetap sama di kedua board.
+//    Jangan menyamakan LORA_MOSI RX dengan TX — kalau RX memakai 25, relay
+//    merah akan bertabrakan dengan jalur SPI dan LoRa gagal baca register.
 #define PIN_LED_RED      25   // merah + buzzer BAHAYA (satu kanal relay)
 #define PIN_LED_YELLOW   26
 #define PIN_LED_GREEN    27
@@ -84,6 +84,13 @@ const int TOTAL_PACKETS   = 50;   // Harus sama dengan TX
 
 // Modul relay umum (optocoupler) aktif LOW: IN=LOW → kontak menutup.
 // Kalau relay Anda justru aktif HIGH, ubah angka ini menjadi 0.
+//
+// ⚠️ GEJALA: SEMUA relay nyala begitu board diberi daya (tanpa TX, tanpa data)
+//    Berarti pin OFF sedang dibaca modul sebagai ON. Dua penyebab:
+//    a) modul AKTIF HIGH  → ubah angka ini menjadi 0
+//    b) modul 5 V aktif LOW tapi sinyal 3.3 V tidak cukup mematikannya
+//       → VCC logika modul ke 3.3 V, JD-VCC ke 5 V (lepas jumper), GND tetap satu
+//    Cara memastikan: upload `firmware/tools/relay-test/relay-test.ino`.
 #define RELAY_ACTIVE_LOW 1
 
 // Pin merah yang bentrok dengan jalur LoRa TIDAK boleh ditulis dari program:
@@ -724,12 +731,18 @@ const char*         delaySource         = "unknown"; // rtt | clock | clock-rel 
 // ══════════════════════════════════════════════════════════════════════════════
 
 void setup() {
+  // PERTAMA: amankan relay sebelum apa pun. Kalau pin dibiarkan mengambang
+  // (high-Z) selama Serial/NVS/LoRa init, modul relay tertentu bisa menganggap
+  // inputnya aktif dan SEMUA relay menyala saat boot. setupActuators() menulis
+  // level OFF ke tiap kanal secepat mungkin.
+  setupActuators();
+
   Serial.begin(115200);
   // Jangan menunggu USB host selamanya: pada board dengan USB native (S3/C3)
   // `while (!Serial)` menggantung kalau tidak ada Serial Monitor, sehingga alat
   // tidak pernah jalan saat dipasang di lapangan tanpa laptop.
   unsigned long serialWait = millis();
-  while (!Serial && millis() - serialWait < 3000UL) delay(10);
+  while (!Serial && millis() - serialWait < 1500UL) delay(10);
 
   // Hitung boot (disimpan di NVS): kalau angkanya naik terus, ada yang
   // menyebabkan RX reboot berulang — mudah dicek tanpa membuka Serial.
@@ -752,8 +765,7 @@ void setup() {
   Serial.println("═══════════════════════════════════════════════════════════");
   Serial.println();
 
-  // Relay disiapkan SEBELUM WiFi: aktuator tidak boleh bergantung jaringan.
-  setupActuators();
+  // Relay sudah diamankan di awal setup(); di sini hanya melaporkan statusnya.
   Serial.printf("Aktuator       : merah=%d kuning=%d hijau=%d buzzer=%d (%s)\n",
                 PIN_LED_RED, PIN_LED_YELLOW, PIN_LED_GREEN, PIN_BUZZER,
                 RELAY_ACTIVE_LOW ? "relay aktif LOW" : "relay aktif HIGH");
@@ -966,7 +978,7 @@ void setupLoRa() {
   }
   if (!loraOk) {
     Serial.println("\n❌ LoRa tidak merespons 5x — restart otomatis.");
-    Serial.println("   Cek wiring: SCK=18 MISO=19 MOSI=25 NSS=5 RST=14 DIO0=4, dan 3V3.");
+    Serial.println("   Cek wiring: SCK=18 MISO=19 MOSI=23 NSS=5 RST=14 DIO0=4, dan 3V3.");
     Serial.flush();
     delay(300);
     ESP.restart();
@@ -991,7 +1003,7 @@ void setupLoRa() {
   Serial.println("   Wiring:");
   Serial.println("   SCK       : GPIO18");
   Serial.println("   MISO      : GPIO19");
-  Serial.println("   MOSI      : GPIO25");
+  Serial.println("   MOSI      : GPIO23 (RX — beda dengan TX yang memakai 25)");
   Serial.println("   NSS       : GPIO5");
   Serial.println("   RST       : GPIO14");
   Serial.println("   DIO0      : GPIO4");

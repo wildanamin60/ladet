@@ -140,6 +140,47 @@ terpisah. Ini juga melindungi RX supaya tidak reboot saat semua relay menyala.
 Kalau relay Anda justru menyala saat IN diberi HIGH, ubah satu baris di
 `ladet-rx-mqtt.ino` menjadi `#define RELAY_ACTIVE_LOW 0`.
 
+## 🚨 Semua relay nyala saat boot (tanpa TX) — cara mendiagnosa
+
+Gejala: board diberi daya, belum ada paket LoRa, tapi **semua** LED/buzzer
+langsung menyala. Kontak **NO/NC tidak berpengaruh** di sini — kalau beban
+menyala, artinya kumparan relay memang sedang diberi tegangan.
+
+Artinya pin yang seharusnya "OFF" dibaca modul sebagai "ON". Ada dua penyebab,
+dan keduanya diperbaiki dengan cara berbeda:
+
+| Penyebab | Tanda | Perbaikan |
+|---|---|---|
+| Modul **aktif HIGH** | relay mati saat pin HIGH | `#define RELAY_ACTIVE_LOW 0` |
+| Modul 5 V aktif LOW, tapi **3.3 V tidak cukup** mematikan optocoupler | relay nyala terus walau pin ditulis HIGH | VCC logika → 3.3 V, JD-VCC → 5 V, jumper dilepas |
+
+### Cara memastikan (2 menit)
+
+Upload **`firmware/tools/relay-test/relay-test.ino`** ke board RX, buka Serial
+Monitor 115200. Sketch itu mengganti semua pin LOW 5 detik → HIGH 5 detik.
+
+- Relay **mati saat LOW** → modul aktif HIGH → set `RELAY_ACTIVE_LOW 0`.
+- Relay **mati saat HIGH** → modul aktif LOW → biarkan `RELAY_ACTIVE_LOW 1`.
+- Relay **nyala terus** → masalah level tegangan → perbaiki VCC/JD-VCC seperti
+  tabel di atas.
+
+### Perbaikan hardware untuk modul 5 V (paling umum)
+
+Modul relay optocoupler 4 kanal punya jumper `VCC–JD-VCC`:
+
+```
+                    ┌─ lepas jumper ini
+VCC  ── opto/logika ┘
+JD-VCC ── kumparan relay ── 5 V adaptor
+
+VCC     → 3.3 V ESP32   (supaya HIGH 3.3 V benar-benar mematikan opto)
+JD-VCC  → 5 V adaptor   (kumparan tetap kuat)
+GND     → GND ESP32 dan GND adaptor (satu titik)
+```
+
+Jangan memberi VCC logika 5 V saat sinyal ESP32 hanya 3.3 V — itulah yang
+membuat relay "tidak mau mati".
+
 ---
 
 ## ⚠️ GPIO 25 bentrok — wajib dicek
