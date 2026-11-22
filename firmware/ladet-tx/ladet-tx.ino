@@ -57,7 +57,12 @@
 // TOTAL_PACKETS = 50 paket DATA (#1..#50). Setiap run juga mengirim 1 paket
 // KALIBRASI #0 lebih dulu (total 51 transmisi) — RX memakai #0 hanya untuk
 // mengunci kalibrasi delay, tidak dipublish/dihitung sebagai data.
-#define TOTAL_PACKETS     50
+#define TOTAL_PACKETS     999
+#define MODE_CONTINUOUS     1
+#define MODE_ENGINEER_BURST 2
+
+int currentTxMode;
+int engineerBurstIndex;
 #define PACKET_INTERVAL   2000UL
 
 // =====================================================
@@ -707,12 +712,19 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
-  // ✅ MEMBANGUN MODE DEFAULT: Setiap kali TX dinyalakan atau di-reset,
-  // mode akan "dibangun" menjadi MONITOR (continuous real-time).
-  // Ini meng-overide setting ENGINEER sebelumnya sehingga TX tidak "terjebak".
-  engineerMode   = false;
-  monitorEnabled = true;
-  runActive      = true;
+  // ⚙️ MENGINISIALISASI MODE OPERASI TX
+  // Mode default: CONTINUOUS = Kirim data setiap 2 detik secara terus-menerus.
+  // Mode ENGINEER_BURST: Kirim paket seq 1-50 sekali, lalu kembali ke CONTINUOUS.
+  currentTxMode      = MODE_CONTINUOUS;  // MODE_CONTINUOUS atau MODE_ENGINEER_BURST
+  engineerBurstIndex = 0;                // Counter paket di dalam burst
+
+  Serial.println();
+  Serial.println();
+  Serial.println("==================================================");
+  Serial.println("       LADET TRANSMITTER v3.1");
+  Serial.println("==================================================");
+  Serial.print("Mode TX        : CONTINUOUS (Realtime)"); // Tampilkan mode di serial monitor
+  Serial.print(" | Engineer Burst: 50 paket sekali (setelah diklik)");
 
   Serial.println();
   Serial.println();

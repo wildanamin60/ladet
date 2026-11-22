@@ -674,11 +674,22 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     pendingDistance = d;
     publishConfigStatus("queued", false);
   } else if (t == CMD_TOPIC) {
-    // Perintah mulai run dari web (non-retained, jadi tidak akan terpantik
-    // ulang saat RX reconnect).
+    // Perintah mulai run dari web
     if (msg == "ENGINEER" || msg == "RUN" || msg == "MONITOR") {
       pendingCommand = msg;
       publishConfigStatus("run_queued", false);
+    }
+    
+    // ✅ AMBIL TAMBAHAN: Jika perintah ENGINEER, kirim perintah ke TX via LoRa
+    // agar TX langsung masuk mode Engineer Burst (50 paket)
+    if (msg == "ENGINEER") {
+      // Kirim paket konfigurasi khusus ke TX
+      LoRa.idle();
+      LoRa.beginPacket();
+      LoRa.print("TYPE=ENGINEER_BURST,REQUEST=START"); // Tipe paket khusus
+      LoRa.endPacket();
+      LoRa.receive();
+      Serial.println("📡 Perintah ENGINEER diterima dari Web & dikirim ke TX via LoRa");
     }
   }
 }
