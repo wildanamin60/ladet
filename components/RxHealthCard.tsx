@@ -9,6 +9,11 @@ interface RxHealthCardProps {
   /** Jam browser dari ticker dashboard (bukan Date.now saat render) */
   nowMs: number;
   connected: boolean;
+  /** Berapa kali `rx_boot` berubah di tengah aliran data pada sesi ini.
+   *  Berbeda dari boot_count kumulatif (yang bisa besar karena hitungan
+   *  seumur NVS): angka ini hanya menghitung reboot yang benar-benar
+   *  terjadi saat dashboard sedang menerima data. */
+  rebootCount?: number;
 }
 
 /** Penyebab reset → kalimat yang bisa dibaca penguji. */
@@ -44,7 +49,7 @@ function wifiQuality(rssi?: number): { label: string; className: string } {
   return { label: 'Lemah', className: 'text-red-600' };
 }
 
-export default function RxHealthCard({ health, updatedAt, nowMs, connected }: RxHealthCardProps) {
+export default function RxHealthCard({ health, updatedAt, nowMs, connected, rebootCount = 0 }: RxHealthCardProps) {
   // Laporan dikirim tiap 1 menit → dianggap basi setelah 2,5 menit.
   const ageMs = updatedAt == null || nowMs === 0 ? null : Math.max(0, nowMs - updatedAt);
   const stale = ageMs != null && ageMs > 150_000;
@@ -52,7 +57,13 @@ export default function RxHealthCard({ health, updatedAt, nowMs, connected }: Rx
   const reset = health?.reset ?? '';
   const resetIsProblem = PROBLEM_RESETS.has(reset);
   const bootCount = health?.boot_count;
-  const manyBoots = bootCount != null && bootCount >= 5;
+  // PERINGATAN hanya untuk reboot yang terjadi SAAT INI, bukan angka kumulatif.
+  // boot_count adalah hitungan seumur NVS (bisa 130 tanpa masalah apa pun),
+  // jadi >=5 bukan indikator "sering reboot". Yang dipakai:
+  //   - rebootCount: rx_boot berubah di tengah aliran paket (paling akurat)
+  //   - uptime_s sangat kecil: RX baru saja nyala (info, bukan alarm)
+  const manyBoots = rebootCount >= 1;
+  const recentlyBooted = health?.uptime_s != null && health.uptime_s < 120;
   const wifi = wifiQuality(health?.wifi_rssi);
 
   const statusPill = !connected
@@ -91,8 +102,16 @@ export default function RxHealthCard({ health, updatedAt, nowMs, connected }: Rx
           <p className={`mt-1 text-sm font-bold tabular-nums ${manyBoots ? 'text-amber-600' : 'text-gray-700'}`}>
             {bootCount != null ? bootCount : '—'}
           </p>
-          {manyBoots && (
-            <p className="text-[10px] text-amber-500 leading-tight">sering reboot — cek catu daya</p>
+          {manyBoots ? (
+            <p className="text-[10px] text-amber-600 leading-tight">
+              {rebootCount}× reboot saat sesi ini — cek catu daya
+            </p>
+          ) : recentlyBooted ? (
+            <p className="text-[10px] text-gray-400 leading-tight">
+              baru nyala {formatUptime(health?.uptime_s)} lalu
+            </p>
+          ) : (
+            <p className="text-[10px] text-gray-400 leading-tight">tidak ada reboot saat sesi ini</p>
           )}
         </div>
 

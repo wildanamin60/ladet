@@ -128,3 +128,31 @@ export async function fetchPacketLog(sf?: 'SF7' | 'SF9' | 'SF12', distanceM?: nu
   return (data ?? []) as PacketLog[];
 }
 
+// ── Riwayat peringatan (ditulis oleh firmware RX) ────────────────────────────
+
+/** Satu baris tabel `ladet_alerts`. */
+export interface AlertRow {
+  id: number;
+  created_at: string;
+  /** 1 = HATI-HATI, 2 = WASPADA, 3 = BAHAYA */
+  level: number;
+  level_name: string;
+  soil_saturation: number | null;
+  delta_g: number | null;
+  tilt_angle: number | null;
+}
+
+export async function fetchAlertHistory(limit = 200): Promise<AlertRow[]> {
+  if (!SUPABASE_ENABLED) return [];
+  const { data, error } = await supabase
+    .from('ladet_alerts')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn('[Supabase] fetchAlertHistory:', error.message);
+    return [];
+  }
+  return (data ?? []) as AlertRow[];
+}
+

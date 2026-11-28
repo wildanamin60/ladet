@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Firmware: sketch Arduino (.ino) + skrip bantu Node yang sudah diarsipkan.
+    // Bukan kode aplikasi Next.js, jadi tidak ikut aturan lint web.
+    "firmware/**",
   ]),
 ]);
 

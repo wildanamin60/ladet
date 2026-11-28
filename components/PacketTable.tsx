@@ -58,25 +58,37 @@ export default function PacketTable({ data, onExportCSV }: PacketTableProps) {
                 <td colSpan={9} className="text-center text-gray-400 py-8">Belum ada data</td>
               </tr>
             ) : (
-              data.map((row, i) => (
-                <tr key={`${row.created_at}-${row.packet_id}-${i}`} className={`border-t border-gray-50 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+              data.map((row, i) => {
+                // Slot yang paketnya tidak sampai: barisnya tetap ada (nomor paket
+                // tidak digeser) tetapi seluruh nilainya kosong, sesuai revisi
+                // "hilang di paket 33 → baris 33 kosong".
+                const ok = row.is_received !== false;
+                return (
+                <tr key={`${row.created_at}-${row.packet_id}-${i}`} className={`border-t border-gray-50 ${ok ? (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50') : 'bg-red-50/60'}`}>
                   <td className="px-3 py-2 font-mono whitespace-nowrap text-gray-600">
-                    {row.created_at ? formatWIB(row.created_at) : '—'}
+                    {ok && row.created_at ? formatWIB(row.created_at) : '—'}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums font-mono text-gray-500">#{row.packet_id}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.soil_saturation.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.tilt_angle.toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.vibration_freq.toFixed(3)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.rssi.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.snr.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{row.delay_ms.toFixed(0)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.soil_saturation.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.tilt_angle.toFixed(2) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.vibration_freq.toFixed(3) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.rssi.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.snr.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{ok ? row.delay_ms.toFixed(0) : '—'}</td>
                   <td className="px-3 py-2 text-center">
-                    <span className={`px-2 py-0.5 rounded-full font-semibold text-[10px] ${LEVEL_BADGE[levelToNumber(row.status_level)]}`}>
-                      {LEVEL_LABEL[levelToNumber(row.status_level)]}
-                    </span>
+                    {ok ? (
+                      <span className={`px-2 py-0.5 rounded-full font-semibold text-[10px] ${LEVEL_BADGE[levelToNumber(row.status_level)]}`}>
+                        {LEVEL_LABEL[levelToNumber(row.status_level)]}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-red-100 font-semibold text-[10px] text-red-600">
+                        Hilang
+                      </span>
+                    )}
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

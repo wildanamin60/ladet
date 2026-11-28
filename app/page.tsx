@@ -4,8 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { formatTimeWIB } from '@/lib/calculations';
 import { DEFAULT_THRESHOLDS, applyCalibration } from '@/lib/thresholds';
-import { getMqttClient, parsePayload, parsePublicMode, DEFAULT_MQTT_CONFIG, LADET_TOPICS, PUBLIC_MODE_TOPIC, RX_ONLINE_TOPIC } from '@/lib/mqtt';
-import { sendLadetAlert } from '@/lib/telegram';
+import { getMqttClient, parsePayload, DEFAULT_MQTT_CONFIG, LADET_TOPICS, RX_ONLINE_TOPIC } from '@/lib/mqtt';
 import { supabase, SUPABASE_ENABLED } from '@/lib/supabase';
 import type { LadetPayload } from '@/lib/mqtt';
 import type { SensorData } from '@/lib/supabase';
@@ -31,14 +30,6 @@ const RX_FRESH_MS = 35_000;
 
 type Level = 'aman' | 'hati-hati' | 'waspada' | 'bahaya';
 type AlertItem = { level: Level; message: string; created_at: string };
-
-function getTgCfg() {
-  if (typeof window === 'undefined') return { botToken: '', chatId: '' };
-  return {
-    botToken: localStorage.getItem('tg_bot_token') ?? '',
-    chatId: localStorage.getItem('tg_chat_id') ?? '',
-  };
-}
 
 const LEVEL_ACCENT: Record<Level, string> = {
   aman: '#4CAF50', 'hati-hati': '#F9A825', waspada: '#E65100', bahaya: '#B71C1C',
@@ -94,16 +85,6 @@ async function fetchAlertsSupabase(): Promise<AlertItem[]> {
   }));
 }
 
-// ── Demo builders (bila Supabase belum dikonfigurasi) ──────────────────
-function buildDemoAlerts(): AlertItem[] {
-  const seq: Level[] = ['waspada', 'hati-hati', 'bahaya', 'waspada', 'hati-hati', 'aman'];
-  return seq.map((lv, i) => ({
-    level: lv,
-    message: ALERT_MESSAGE[lv],
-    created_at: new Date(Date.now() - i * 41 * 60000).toISOString(),
-  }));
-}
-
 function emptyPayload(): LadetPayload {
   return {
     node_id: 'LADET-NODE-01', timestamp: Date.now(),
@@ -130,10 +111,10 @@ function sensorWord(type: 'moisture' | 'vibration' | 'tilt', v: number): string 
 
 // Exact per-level hex tokens: [mid / dark / light-accent]
 const LEVEL_THEME: Record<string, { top: string; bottom: string; accent: string }> = {
-  aman:        { top: '#4CAF50', bottom: '#1B5E20', accent: '#A5D6A7' },
+  aman: { top: '#4CAF50', bottom: '#1B5E20', accent: '#A5D6A7' },
   'hati-hati': { top: '#FFD54F', bottom: '#F9A825', accent: '#FFF9C4' },
-  waspada:     { top: '#FF6D00', bottom: '#E65100', accent: '#FFE0B2' },
-  bahaya:      { top: '#F44336', bottom: '#B71C1C', accent: '#FFCDD2' },
+  waspada: { top: '#FF6D00', bottom: '#E65100', accent: '#FFE0B2' },
+  bahaya: { top: '#F44336', bottom: '#B71C1C', accent: '#FFCDD2' },
 };
 const LEVEL_ICON: Record<string, string> = {
   aman: '✅', 'hati-hati': '⚠️', waspada: '‼️', bahaya: '🚨',
@@ -149,19 +130,17 @@ const LEVEL_ACTION: Record<string, string> = {
 };
 
 export default function HomePage() {
-  const [data, setData]             = useState<LadetPayload>(emptyPayload());
+  const [data, setData] = useState<LadetPayload>(emptyPayload());
   const [lastUpdate, setLastUpdate] = useState('—');
-  const [connected, setConnected]   = useState(false);
+  const [connected, setConnected] = useState(false);
   const [lastDataAt, setLastDataAt] = useState<number | null>(null); // kapan data RX terakhir masuk
-  const [nowMs, setNowMs]           = useState(0);                   // jam utk hitung kesegaran data
-  const [alerts, setAlerts]         = useState<AlertItem[]>([]);
-  const [publicTesting, setPublicTesting] = useState(false);
-  const [publicModeUntil, setPublicModeUntil] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(0);                   // jam utk hitung kesegaran data
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const mqttRef = useRef<MqttClient | null>(null);
   const prevLevelRef = useRef<Level>('aman');   // level paket sebelumnya — deteksi transisi
-  const dataRef      = useRef<LadetPayload | null>(null);  // payload terakhir (untuk merge)
+  const dataRef = useRef<LadetPayload | null>(null);  // payload terakhir (untuk merge)
   const lastMqttAtRef = useRef<number | null>(null);       // kapan MQTT terakhir kirim data (gate polling Supabase)
-  
+
   // Deterministic initial value so SSR and client first render match
   // (real WIB time is set client-side in the effect below to avoid hydration mismatch).
   const [clock, setClock] = useState<string>('--:--:--');
@@ -190,38 +169,30 @@ export default function HomePage() {
     console.log('[MQTT Home] Connecting to broker:', DEFAULT_MQTT_CONFIG.brokerUrl);
     const client = getMqttClient(DEFAULT_MQTT_CONFIG);
     mqttRef.current = client;
-    
+
     const handleConnect = () => {
       console.log('[Home] ✅ MQTT Connected');
       setConnected(true);
       LADET_TOPICS.forEach(t => client.subscribe(t));
-      client.subscribe(PUBLIC_MODE_TOPIC);
       // LWT RX: dipakai untuk mematikan badge LIVE lebih cepat saat gateway mati.
       client.subscribe(RX_ONLINE_TOPIC);
     };
-    
+
     const handleDisconnect = () => {
       console.log('[Home] ⚠️ MQTT Disconnected');
       setConnected(false);
     };
-    
+
     const handleOffline = () => {
       console.log('[Home] 📴 MQTT Offline');
       setConnected(false);
     };
-    
+
     const handleMessage = (topic: string, msg: Buffer) => {
       if (topic === RX_ONLINE_TOPIC) {
         // "offline" = LWT RX (gateway mati). Kosongkan penanda data supaya
         // badge langsung MENUNGGU RX, bukan menunggu timeout 35 dtk.
         if (msg.toString().trim() !== 'online') { setLastDataAt(null); lastMqttAtRef.current = null; }
-        return;
-      }
-      if (topic === PUBLIC_MODE_TOPIC) {
-        const mode = parsePublicMode(msg);
-        const active = !!mode?.testing && (!mode.until || mode.until > Date.now());
-        setPublicTesting(active);
-        setPublicModeUntil(active ? (mode?.until ?? null) : null);
         return;
       }
       // Arsitektur resmi LADET: data sensor HANYA berasal dari RX via
@@ -274,51 +245,28 @@ export default function HomePage() {
             ...prev,
           ].slice(0, 10));
 
-          // Halaman utama juga merupakan monitor realtime. Sebelumnya hanya
-          // dashboard admin yang mengirim Telegram, sehingga status di sini
-          // berubah tetapi tidak ada notifikasi otomatis.
-          const cfg = getTgCfg();
-          if (cfg.botToken && cfg.chatId) {
-            sendLadetAlert(cfg, {
-              soil_saturation: merged.soil_saturation,
-              vibration_freq: merged.vibration_freq,
-              tilt_angle: merged.tilt_angle,
-              rssi: merged.rssi,
-              snr: merged.snr,
-              delay_ms: merged.delay_ms,
-              spreading_factor: merged.spreading_factor,
-              distance_m: merged.distance_m,
-              status_level: lvl,
-            }).then(ok => {
-              console.log(ok
-                ? '[Telegram Home] ✅ Notifikasi realtime berhasil dikirim'
-                : '[Telegram Home] ❌ Notifikasi realtime gagal dikirim');
-            }).catch(error => {
-              console.error('[Telegram Home] ❌ Kesalahan pengiriman:', error);
-            });
-          } else {
-            console.warn('[Telegram Home] ⚠️ Bot Token/Chat ID belum terbaca dari localStorage');
-          }
+          // Notifikasi Telegram otomatis ditangani langsung oleh firmware RX (24/7)
+          // agar tetap terkirim saat web tidak dibuka dan tidak terjadi pesan ganda.
         }
       }
     };
-    
+
     const handleError = (err: Error) => {
       console.error('[Home] ❌ MQTT Error:', err.message);
     };
-    
+
     // Attach event handlers
     client.on('connect', handleConnect);
     client.on('disconnect', handleDisconnect);
     client.on('offline', handleOffline);
     client.on('message', handleMessage);
     client.on('error', handleError);
-    
+
     // If already connected, trigger connect manually
     if (client.connected) {
       handleConnect();
     }
-    
+
     return () => {
       // Remove event handlers only — don't kill the singleton!
       client.off('connect', handleConnect);
@@ -382,14 +330,6 @@ export default function HomePage() {
   const linkState: 'live' | 'waiting' | 'offline' =
     !connected ? 'offline' : dataAgeMs < RX_FRESH_MS ? 'live' : 'waiting';
 
-  useEffect(() => {
-    if (!publicTesting || !publicModeUntil) return;
-    // setState hanya dari callback timer — tidak sinkron di body effect.
-    const remaining = Math.max(0, publicModeUntil - Date.now());
-    const timer = setTimeout(() => setPublicTesting(false), remaining);
-    return () => clearTimeout(timer);
-  }, [publicTesting, publicModeUntil]);
-
   // BAHAYA: getarkan HP pengguna (Vibration API) saat diakses.
   // Catatan: API ini hanya berjalan di Android (Chrome/Edge) lewat HTTPS
   // dan umumnya butuh satu interaksi (tap) lebih dulu — jadi kita panggil
@@ -405,29 +345,6 @@ export default function HomePage() {
     events.forEach((e) => window.addEventListener(e, tryVibrate, { once: true, passive: true }));
     return () => events.forEach((e) => window.removeEventListener(e, tryVibrate));
   }, [level]);
-
-  if (publicTesting) {
-    return (
-      <main className="min-h-screen flex flex-col text-white" style={{ background: 'linear-gradient(180deg, #24523a, #123020)' }}>
-        <header className="bg-black/15 backdrop-blur border-b border-white/20 px-4 py-2.5 sticky top-0 z-40">
-          <div className="flex items-center justify-between gap-3 max-w-lg mx-auto">
-            <div className="flex items-center gap-2.5"><span className="text-2xl">🏔</span><div><h1 className="text-xl font-black">LADET</h1><p className="text-xs text-white/80">Sistem Deteksi Longsor Desa Klungkung</p></div></div>
-            <span className="rounded-full bg-amber-400/25 border border-amber-200/40 px-2.5 py-1 text-[10px] font-bold">UJI ENGINEER</span>
-          </div>
-        </header>
-        <div className="flex-1 flex items-center justify-center px-5 py-10">
-          <section className="w-full max-w-lg rounded-2xl border border-white/20 bg-black/20 p-7 text-center shadow-2xl backdrop-blur-md">
-            <div className="text-6xl mb-5">🛠️</div>
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Pemberitahuan</p>
-            <h2 className="mt-3 text-2xl font-black">Sistem sedang diuji</h2>
-            <p className="mt-3 text-sm leading-relaxed text-white/80">Pemantauan publik sementara dihentikan karena Engineer sedang melakukan pengujian sensor.</p>
-            <p className="mt-5 text-xs text-white/55">Data pengujian tidak mewakili kondisi longsor sebenarnya.</p>
-            <p className="mt-8 text-xs font-semibold text-white/60">Desa Klungkung · Sukorambi · Jember</p>
-          </section>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main
@@ -471,13 +388,12 @@ export default function HomePage() {
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-bold uppercase tracking-widest text-white/70">Status Peringatan</p>
                 <div
-                  className={`inline-flex items-center gap-1.5 border rounded-full px-2.5 py-1 shrink-0 backdrop-blur ${
-                    linkState === 'live'
+                  className={`inline-flex items-center gap-1.5 border rounded-full px-2.5 py-1 shrink-0 backdrop-blur ${linkState === 'live'
                       ? 'bg-white/15 border-white/20'
                       : linkState === 'waiting'
                         ? 'bg-amber-400/30 border-amber-200/50'
                         : 'bg-white/10 border-white/15'
-                  }`}
+                    }`}
                   style={{ flexShrink: 0 }}
                   title={
                     linkState === 'live'
@@ -574,29 +490,29 @@ export default function HomePage() {
             <p className="text-xs text-white/50 py-4 text-center">Tidak ada peringatan</p>
           ) : (
             <>
-            <ul className="flex flex-col gap-2">
-              {alerts.slice(0, 3).map((a, i) => (
-                <li key={i} className="flex items-center gap-3 bg-white/10 rounded-xl px-3 py-2 border border-white/10" style={{ borderLeft: `3px solid ${LEVEL_ACCENT[a.level]}` }}>
-                  <span className="text-lg leading-none" style={{ color: LEVEL_ACCENT[a.level] }}>{LEVEL_ICON[a.level]}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold leading-tight text-white">
-                      {LEVEL_TITLE[a.level]}
-                    </p>
-                    <p className="text-[11px] text-white/70 leading-tight truncate">{a.message}</p>
-                  </div>
-                  <span className="text-[10px] text-white/50 font-mono shrink-0 whitespace-nowrap">
-                    {formatTimeWIB(a.created_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            {alerts.length > 3 && (
-              <Link href="/riwayat" className="mt-1 flex items-center justify-center gap-1.5 text-[11px] font-semibold text-white/80 hover:text-white transition-colors">
-                Lihat semua riwayat →
-              </Link>
-            )}
-          </>
-        )}
+              <ul className="flex flex-col gap-2">
+                {alerts.slice(0, 3).map((a, i) => (
+                  <li key={i} className="flex items-center gap-3 bg-white/10 rounded-xl px-3 py-2 border border-white/10" style={{ borderLeft: `3px solid ${LEVEL_ACCENT[a.level]}` }}>
+                    <span className="text-lg leading-none" style={{ color: LEVEL_ACCENT[a.level] }}>{LEVEL_ICON[a.level]}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold leading-tight text-white">
+                        {LEVEL_TITLE[a.level]}
+                      </p>
+                      <p className="text-[11px] text-white/70 leading-tight truncate">{a.message}</p>
+                    </div>
+                    <span className="text-[10px] text-white/50 font-mono shrink-0 whitespace-nowrap">
+                      {formatTimeWIB(a.created_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {alerts.length > 3 && (
+                <Link href="/riwayat" className="mt-1 flex items-center justify-center gap-1.5 text-[11px] font-semibold text-white/80 hover:text-white transition-colors">
+                  Lihat semua riwayat →
+                </Link>
+              )}
+            </>
+          )}
         </section>
 
 

@@ -23,13 +23,16 @@ export interface Thresholds {
 export const DEFAULT_THRESHOLDS: Thresholds = {
   soil_saturation: { hatiHati: 60,  waspada: 75, bahaya: 90 },  // %
   vibration_freq:  { hatiHati: 0.5, waspada: 1.0, bahaya: 2.0 }, // Δg
-  tilt_angle:      { hatiHati: 15,  waspada: 30, bahaya: 45 },   // °
+  // Nilai `tilt_angle` dari firmware adalah SELISIH terhadap baseline (DTH),
+  // bukan sudut lereng absolut. Ambang BAHAYA = 5° sama dengan DELTA_THETA_THRESHOLD.
+  tilt_angle:      { hatiHati: 1.5, waspada: 3.0, bahaya: 5.0 }, // °
 };
 
 /** Urutan level dari paling ringan ke paling berat — dipakai untuk membandingkan level */
 export const LEVEL_ORDER = ['aman', 'hati-hati', 'waspada', 'bahaya'] as const;
 
-const LS_KEY = 'ladet_thresholds';
+// v2: nilai lama (15/30/45) memakai arti sudut absolut, tidak cocok dengan DTH.
+const LS_KEY = 'ladet_thresholds_v2';
 
 /** Ambil thresholds dari localStorage (dengan fallback ke default) */
 export function loadThresholds(): Thresholds {

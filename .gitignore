@@ -35,6 +35,8 @@ yarn-error.log*
 
 # firmware secrets — token bot Telegram jangan sampai ke GitHub
 firmware/ladet-rx-mqtt/secrets.h
+firmware/ladet-rx-realtime/secrets.h
+firmware/ladet-rx-skripsi/secrets.h
 
 # vercel
 .vercel
@@ -48,3 +50,6 @@ next-env.d.ts
 .vercel
 .env*
 
+
+# file kunci sementara Excel (~$Nama.xlsx)
+~$*

@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { MqttClient } from 'mqtt';
-import { publishSF, publishDistance, publishCmd, type ConfigStatus } from '@/lib/mqtt';
+import { publishSF, publishDistance, type ConfigStatus } from '@/lib/mqtt';
 
 export type SF = 'SF7' | 'SF9' | 'SF12';
 
 /** Perubahan yang menunggu konfirmasi user (tidak langsung di-apply) */
-type PendingChange = { kind: 'sf'; value: SF } | { kind: 'dist'; value: number } | { kind: 'run' };
+type PendingChange = { kind: 'sf'; value: SF } | { kind: 'dist'; value: number };
 
 interface ScenarioSelectorProps {
   sf: SF;
@@ -46,19 +46,19 @@ export default function ScenarioSelector({
   // ── Konfirmasi dulu, baru kirim (jangan langsung set saat tombol diklik) ──
   const [pending, setPending] = useState<PendingChange | null>(null);
   const [sentMsg, setSentMsg] = useState<string | null>(null);
+  // Jam untuk info "terakhir terlihat": di-update timer tiap detik, BUKAN
+  // Date.now() saat render — render harus murni (aturan lint react-hooks).
+  const [nowMs, setNowMs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const targetSF = pending ? (pending.kind === 'sf' ? pending.value : sf) : sf;
   const targetDist = pending ? (pending.kind === 'dist' ? pending.value : distanceM) : distanceM;
 
   function confirmPending() {
     if (!pending) return;
-    // ── Perintah mulai run ──
-    if (pending.kind === 'run') {
-      if (mqttClient?.connected) publishCmd(mqttClient, 'RUN');
-      setSentMsg('Perintah RUN dikirim ke TX (via RX) — menunggu konfirmasi');
-      setPending(null);
-      return;
-    }
     if (pending.kind === 'sf') onSFChange(pending.value);
     else onDistanceChange(pending.value);
     setSentMsg(
@@ -123,7 +123,7 @@ export default function ScenarioSelector({
             <span className="text-green-600 font-semibold">● RX online</span>
           ) : rxOnline === false ? (
             <span className="text-red-500 font-semibold">
-              ○ RX OFFLINE (mati/listrik putus){rxSeenAt ? ` — terakhir terlihat ${Math.round((Date.now() - rxSeenAt) / 1000)} dtk lalu` : ' — belum pernah terlihat sejak halaman dibuka'}
+              ○ RX OFFLINE (mati/listrik putus){rxSeenAt ? ` — terakhir terlihat ${Math.max(0, Math.round((nowMs - rxSeenAt) / 1000))} dtk lalu` : ' — belum pernah terlihat sejak halaman dibuka'}
             </span>
           ) : (
             <span className="text-gray-400">○ RX: status tidak diketahui (upload firmware RX terbaru)</span>
@@ -150,23 +150,6 @@ export default function ScenarioSelector({
           )}
           {rxOnline === true && configStatus?.state === 'tx_unconfirmed' && (
             <span className="ml-1 text-red-500 font-semibold"> · TX tidak konfirmasi config — set manual!</span>
-          )}
-          {rxOnline === true && configStatus?.state === 'run_queued' && (
-            <span className="ml-1 text-amber-600 font-semibold"> · perintah RUN dikirim ke TX…</span>
-          )}
-          {rxOnline === true && configStatus?.state === 'run_resynced' && (
-            <span className="ml-1 text-green-600 font-semibold"> · RUN diterima setelah auto-resync SF (kini SF{configStatus.sf}) ✓</span>
-          )}
-          {rxOnline === true && configStatus?.state === 'run_started' && (
-            <span className="ml-1 text-green-600 font-semibold"> · RUN diterima TX — pengujian dimulai ✓</span>
-          )}
-          {rxOnline === true && configStatus?.state === 'run_busy' && (
-            <span className="ml-1 text-amber-600 font-semibold"> · masih ada run berjalan — tunggu selesai dulu</span>
-          )}
-          {rxOnline === true && configStatus?.state === 'run_unconfirmed' && (
-            <span className="ml-1 text-amber-600 font-semibold" title="RX hidup, tetapi TX belum membalas ACK. Board TX dapat tetap menyala tanpa link LoRa yang benar.">
-              · TX belum membalas ACK RUN (bukan bukti TX mati)
-            </span>
           )}
         </p>
       </div>
@@ -258,15 +241,8 @@ export default function ScenarioSelector({
           ))}
         </div>
 
-        {/* ── Mulai run baru (perintah ke TX) ── */}
-        <button onClick={() => setPending({ kind: 'run' })}
-          className="w-full rounded-xl py-2.5 bg-green-600 text-white text-sm font-bold
-            hover:bg-green-700 active:scale-[0.99] transition">
-          ▶ Mulai Run Baru — kirim perintah ke TX
-        </button>
-
         <p className="text-[10px] text-gray-400 text-center">
-          50 paket per skenario · interval 2 detik · {sf} / {distanceM} m
+          50 paket diambil dari aliran realtime (interval 2 dtk) · {sf} / {distanceM} m
         </p>
       </div>
 
@@ -275,12 +251,11 @@ export default function ScenarioSelector({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setPending(null)}>
           <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-5 w-full max-w-xs" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-bold text-gray-800 mb-1">
-              {pending.kind === 'run' ? 'Mulai run baru sekarang?' : 'Terapkan skenario ini?'}
+              Terapkan skenario ini?
             </h3>
             <p className="text-xs text-gray-500 mb-3">
-              {pending.kind === 'run'
-                ? 'TX akan mengirim #0 kalibrasi lalu data #1..#50 pada SF/jarak aktif, dari posisi node sekarang (baseline lama dipakai).'
-                : 'Config dikirim ke RX via MQTT lalu dikonfirmasi ke TX via LoRa — diterapkan hanya saat kanal kosong (tidak mengganggu run berjalan).'}
+              Config dikirim ke RX via MQTT lalu dikonfirmasi ke TX via LoRa.
+              TX tetap mengalirkan data realtime selama perubahan SF diterapkan.
             </p>
             <div className="flex items-center justify-center gap-3 bg-gray-50 rounded-xl p-3 mb-4">
               <span className="text-sm font-black text-gray-800">{targetSF}</span>

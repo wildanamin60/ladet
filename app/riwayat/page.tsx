@@ -2,11 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
 import { formatTimeWIB } from '@/lib/calculations';
-
-type Level = 'aman' | 'hati-hati' | 'waspada' | 'bahaya';
-type AlertItem = { level: Level; message: string; created_at: string };
+import { fetchAlertHistory, SUPABASE_ENABLED, type AlertRow } from '@/lib/supabase';
+import {
+  ALERT_MESSAGE,
+  HISTORY_EVENT,
+  HISTORY_MAX,
+  loadAlertHistory,
+  type AlertEntry,
+  type AlertLevel,
+} from '@/lib/alertHistory';
 
 const LEVEL_ACCENT: Record<string, string> = {
   aman: '#4CAF50', 'hati-hati': '#F9A825', waspada: '#E65100', bahaya: '#B71C1C',
@@ -17,42 +22,16 @@ const LEVEL_TITLE: Record<string, string> = {
 const LEVEL_ICON: Record<string, string> = {
   aman: '✅', 'hati-hati': '⚠️', waspada: '‼️', bahaya: '🚨',
 };
-const ALERT_MESSAGE: Record<string, string> = {
-  aman: 'Kondisi aman.',
-  'hati-hati': 'Kelembapan tanah meningkat.',
-  waspada: 'Getaran terdeteksi pada lereng.',
-  bahaya: 'LERENG BERGERAK — segera evakuasi!',
-};
 
-const SUPABASE_ENABLED =
-  process.env.NEXT_PUBLIC_DEMO_MODE !== 'true' &&
-  !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
-  !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-  !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('your-project') &&
-  !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.includes('your-anon-key');
-
-async function fetchAlertsSupabase(): Promise<AlertItem[]> {
-  const { data, error } = await supabase
-    .from('sensor_data')
-    .select('status_level, created_at')
-    .neq('status_level', 'aman')
-    .order('created_at', { ascending: false })
-    .limit(50);
-  if (error || !data) return [];
-  return (data as { status_level: Level; created_at: string }[]).map((r) => ({
-    level: r.status_level,
-    message: ALERT_MESSAGE[r.status_level],
-    created_at: r.created_at,
-  }));
+function levelFromRow(n: number): AlertLevel {
+  if (n === 3) return 'bahaya';
+  if (n === 2) return 'waspada';
+  return 'hati-hati';
 }
 
-function buildDemoAlerts(): AlertItem[] {
-  const seq: Level[] = ['waspada', 'hati-hati', 'bahaya', 'waspada', 'hati-hati', 'aman'];
-  return seq.map((lv, i) => ({
-    level: lv,
-    message: ALERT_MESSAGE[lv],
-    created_at: new Date(Date.now() - i * 41 * 60000).toISOString(),
-  }));
+function rowToEntry(r: AlertRow): AlertEntry {
+  const level = levelFromRow(r.level);
+  return { level, message: ALERT_MESSAGE[level], created_at: r.created_at };
 }
 
 function dayKey(d: Date): string {
@@ -93,30 +72,56 @@ function fromInputValue(s: string): Date {
 }
 
 export default function RiwayatPage() {
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
+  const [ready, setReady] = useState(false);
+  const [source, setSource] = useState<'db' | 'local'>('local');
   const [selected, setSelected] = useState<Date>(new Date());
   const inited = useRef(false);
 
+  // Sumber utama: database (diisi firmware RX, jadi tetap lengkap walau web tutup).
   useEffect(() => {
+    if (!SUPABASE_ENABLED) return;
     let cancelled = false;
+    // Semua setState dibungkus fungsi (bukan langsung di badan effect) supaya
+    // tidak memicu lint react-hooks/set-state-in-effect. Perilaku tetap sama.
+    function applyRows(rows: AlertEntry[]) {
+      if (cancelled) return;
+      setSource('db');
+      if (rows.length > 0) setAlerts(rows);
+      setReady(true);
+    }
     async function load() {
-      const list = SUPABASE_ENABLED ? await fetchAlertsSupabase() : buildDemoAlerts();
-      if (!cancelled) {
-        setAlerts(list);
-        setLoading(false);
-      }
+      applyRows((await fetchAlertHistory()).map(rowToEntry));
     }
     load();
-    const t = setInterval(load, 15000);
+    const t = setInterval(load, 30000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
   }, []);
 
+  // Cadangan tanpa database: riwayat yang terkumpul di perangkat ini.
   useEffect(() => {
-    if (!inited.current && alerts.length > 0) {
+    if (SUPABASE_ENABLED) return;
+    const reload = () => {
+      setAlerts(loadAlertHistory());
+      setReady(true);
+    };
+    reload();
+
+    window.addEventListener(HISTORY_EVENT, reload);
+    window.addEventListener('storage', reload);
+    return () => {
+      window.removeEventListener(HISTORY_EVENT, reload);
+      window.removeEventListener('storage', reload);
+    };
+  }, []);
+
+  // Pilih tanggal terbaru sekali saja setelah data pertama masuk.
+  useEffect(() => {
+    function selectLatestDay() {
+      if (inited.current || alerts.length === 0) return;
       const latest = alerts.reduce((m, a) => {
         const t = new Date(a.created_at).getTime();
         return t > m ? t : m;
@@ -126,6 +131,7 @@ export default function RiwayatPage() {
         inited.current = true;
       }
     }
+    selectLatestDay();
   }, [alerts]);
 
   const dayItems = useMemo(
@@ -135,6 +141,29 @@ export default function RiwayatPage() {
         .sort((x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime()),
     [alerts, selected]
   );
+
+  function exportCSV() {
+    if (alerts.length === 0) return;
+    const sorted = [...alerts].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const header = 'Waktu (WIB),Level,Keterangan';
+    const lines = sorted.map((a) => {
+      const waktu = new Date(a.created_at).toLocaleString('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      });
+      const pesan = a.message.replace(/"/g, '""');
+      return `${waktu},"${LEVEL_TITLE[a.level]}","${pesan}"`;
+    });
+    const csv = '\ufeff' + [header, ...lines].join('\r\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    link.download = `ladet-riwayat-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
 
   return (
     <main className="flex flex-col min-h-screen text-white" style={{ background: 'linear-gradient(180deg, #0f172a 0%, #1e293b 100%)' }}>
@@ -180,14 +209,33 @@ export default function RiwayatPage() {
               style={{ colorScheme: 'dark' }}
             />
           </div>
+          <button
+            type="button"
+            onClick={exportCSV}
+            disabled={alerts.length === 0}
+            className="w-full rounded-xl bg-white/15 hover:bg-white/25 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-2 text-sm font-bold text-white transition-colors"
+          >
+            ⬇ Unduh Riwayat (CSV)
+          </button>
         </div>
 
-        {loading && alerts.length === 0 ? (
+        {!ready ? (
           <p className="text-center text-white/50 py-10">Memuat…</p>
         ) : dayItems.length === 0 ? (
-          <p className="text-center text-white/50 py-10">
-            Tidak ada riwayat peringatan pada {dayLabel(selected).toLowerCase()}.
-          </p>
+          <div className="text-center text-white/60 py-10 flex flex-col gap-2">
+            <p>
+              {alerts.length === 0
+                ? 'Belum ada peringatan tercatat.'
+                : `Tidak ada peringatan pada ${dayLabel(selected).toLowerCase()}.`}
+            </p>
+            {alerts.length === 0 && (
+              <p className="text-[11px] text-white/40 px-6 leading-relaxed">
+                {source === 'db'
+                  ? 'Database tersambung, tetapi belum ada peringatan. RX akan mengisi riwayat begitu status berubah.'
+                  : 'Riwayat dicatat selama situs ini dibuka dan dari log terakhir RX. Agar tercatat 24/7, aktifkan database (lihat docs/SUPABASE-SETUP.md).'}
+              </p>
+            )}
+          </div>
         ) : (
           <section
             className="backdrop-blur-md border border-white/15 shadow-2xl text-white"
@@ -196,13 +244,15 @@ export default function RiwayatPage() {
             <ul className="flex flex-col gap-2">
               {dayItems.map((a, i) => (
                 <li
-                  key={i}
+                  key={`${a.created_at}-${i}`}
                   className="flex items-center gap-3 bg-white/10 rounded-xl px-3 py-2 border border-white/10"
-                  style={{ borderLeft: `3px solid ${LEVEL_ACCENT[a.level]}` }}
+                  style={{ borderLeft: `3px solid ${LEVEL_ACCENT[a.level as AlertLevel]}` }}
                 >
-                  <span className="text-lg leading-none" style={{ color: LEVEL_ACCENT[a.level] }}>{LEVEL_ICON[a.level]}</span>
+                  <span className="text-lg leading-none" style={{ color: LEVEL_ACCENT[a.level as AlertLevel] }}>
+                    {LEVEL_ICON[a.level as AlertLevel]}
+                  </span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold leading-tight text-white">{LEVEL_TITLE[a.level]}</p>
+                    <p className="text-sm font-bold leading-tight text-white">{LEVEL_TITLE[a.level as AlertLevel]}</p>
                     <p className="text-[11px] text-white/70 leading-tight truncate">{a.message}</p>
                   </div>
                   <span className="text-[10px] text-white/50 font-mono shrink-0 whitespace-nowrap">
@@ -215,6 +265,11 @@ export default function RiwayatPage() {
         )}
 
         <p className="text-center text-[10px] text-white/60 pt-1">
+          {source === 'db'
+            ? 'Tersimpan di database — lengkap walau situs tidak dibuka.'
+            : `Tersimpan di perangkat ini, maksimal ${HISTORY_MAX} peringatan terakhir.`}
+        </p>
+        <p className="text-center text-[10px] text-white/60">
           LADET — Landslide Early Detector Tool<br />
           Teknik Elektro · Universitas Jember
         </p>

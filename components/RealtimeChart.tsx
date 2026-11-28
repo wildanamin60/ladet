@@ -74,10 +74,26 @@ const CHART_CONFIG = {
   },
 };
 
+/** Satu baris nilai di dalam tooltip. */
+interface TooltipLine {
+  dataKey?: string | number;
+  name?: string;
+  value?: number | string;
+  color?: string;
+  payload?: ChartPoint;
+}
+
+interface TooltipBoxProps {
+  active?: boolean;
+  payload?: TooltipLine[];
+  label?: string | number;
+  unit: string;
+}
+
 // Custom tooltip
-const CustomTooltip = ({ active, payload, label, unit }: any) => {
+const CustomTooltip = ({ active, payload, label, unit }: TooltipBoxProps) => {
   if (!active || !payload?.length) return null;
-  const pt: ChartPoint | undefined = payload[0]?.payload;
+  const pt = payload[0]?.payload;
   return (
     <div className="bg-gray-900 text-white text-xs rounded-lg p-2 shadow-lg border border-gray-700">
       <p className="font-semibold mb-1 text-gray-300">
@@ -86,9 +102,9 @@ const CustomTooltip = ({ active, payload, label, unit }: any) => {
       {pt?.time && pt.time !== label && (
         <p className="text-gray-400 mb-1">Diterima: {pt.time}</p>
       )}
-      {payload.map((p: any) => (
-        <p key={p.dataKey} style={{ color: p.color }}>
-          {p.name}: <span className="font-bold">{p.value?.toFixed(2)}{unit}</span>
+      {payload.map((p) => (
+        <p key={String(p.dataKey)} style={{ color: p.color }}>
+          {p.name}: <span className="font-bold">{Number(p.value ?? 0).toFixed(2)}{unit}</span>
         </p>
       ))}
     </div>

@@ -10,8 +10,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [status, setStatus] = useState<'loading' | 'authed'>('loading');
 
   useEffect(() => {
-    if (isAuthed()) setStatus('authed');
-    else router.replace('/login');
+    // Dibungkus fungsi: setState langsung di badan effect memicu lint
+    // react-hooks/set-state-in-effect. Perilaku sama (cek sekali saat mount).
+    function checkSession() {
+      if (isAuthed()) setStatus('authed');
+      else router.replace('/login');
+    }
+    checkSession();
   }, [router]);
 
   if (status !== 'authed') {

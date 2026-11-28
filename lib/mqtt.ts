@@ -49,6 +49,16 @@ export interface LadetPayload {
   rx_ms?: number;
   /** true = SEQ dari TX tidak maju (firmware TX lama selalu SEQ=1) */
   seq_stuck?: boolean;
+  /** Nomor boot RX. Berubah di tengah pengujian = gateway reboot. */
+  rx_boot?: number;
+  /** Umur RX (detik) saat paket ini — kecil berarti baru nyala/reboot. */
+  rx_uptime_s?: number;
+  /** Jumlah paket TX yang hilang tepat sebelum paket ini (0 = berurutan). */
+  seq_gap?: number;
+  /** Penyebab reboot RX terakhir (BROWNOUT / TASK_WDT / PANIC / POWERON). */
+  rx_reset?: string;
+  /** Berapa kali ACK RX gagal selesai (TxDone tidak datang) sejak boot. */
+  rx_ack_timeouts?: number;
   /** Tracking loss RX (deteksi gap SEQ): total paket yang dikirim TX.
    *  Sumber kebenaran untuk counter TERKIRIM di dashboard. */
   total_expected?: number;
@@ -203,11 +213,41 @@ export interface EnhancedPayload {
     rx_count?: number;
     rx_ms?: number;
     seq_stuck?: boolean;
+    /** Nomor boot RX — berubah di tengah run berarti gateway reboot. */
+    rx_boot?: number;
+    /** Umur RX (detik) saat paket ini diterima — kecil = baru nyala. */
+    rx_uptime_s?: number;
+    /** Jumlah paket TX yang hilang tepat sebelum paket ini (0 = berurutan). */
+    seq_gap?: number;
+    /** Penyebab reboot RX terakhir (BROWNOUT / TASK_WDT / PANIC / POWERON). */
+    rx_reset?: string;
+    /** Berapa kali ACK RX gagal selesai (TxDone tidak datang) sejak boot. */
+    rx_ack_timeouts?: number;
   };
 }
 
+/**
+ * Bentuk payload MENTAH dari RX sebelum dinormalisasi. Semua field opsional:
+ * firmware lama belum mengirim semuanya, jadi `normalizePayload` mengisi nilai
+ * bawaan. Nested (sensor/radio/test) = format resmi RX; flat = format lama.
+ */
+export type RawLadetPayload = Partial<LadetPayload> & {
+  sensor?: Partial<NonNullable<EnhancedPayload['sensor']>> & {
+    theta_measured?: number;
+    theta_r?: number;
+    theta_s?: number;
+    tilt_angle_measured?: number;
+    tilt_angle_reference?: number;
+    tx_time?: string;
+  };
+  radio?: Partial<NonNullable<EnhancedPayload['radio']>>;
+  test?: Partial<NonNullable<EnhancedPayload['test']>> & { rtt_ms?: number };
+  status?: string;
+  status_level?: string;
+};
+
 /** Normalize enhanced payload to LadetPayload (backward compatible) */
-export function normalizePayload(raw: any): LadetPayload {
+export function normalizePayload(raw: RawLadetPayload): LadetPayload {
   // If nested structure (new format from RX)
   if (raw.sensor || raw.radio || raw.test) {
     return {
@@ -239,6 +279,11 @@ export function normalizePayload(raw: any): LadetPayload {
       rx_count: raw.test?.rx_count ?? undefined,
       rx_ms: raw.test?.rx_ms ?? undefined,
       seq_stuck: raw.test?.seq_stuck ?? false,
+      rx_boot: raw.test?.rx_boot ?? undefined,
+      rx_uptime_s: raw.test?.rx_uptime_s ?? undefined,
+      seq_gap: raw.test?.seq_gap ?? undefined,
+      rx_reset: raw.test?.rx_reset ?? undefined,
+      rx_ack_timeouts: raw.test?.rx_ack_timeouts ?? undefined,
       total_expected: raw.test?.total_expected ?? undefined,
       total_received: raw.test?.total_received ?? undefined,
       spreading_factor: (raw.radio?.sf ?? 'SF9') as LadetPayload['spreading_factor'],
@@ -316,17 +361,6 @@ export const TX_ONLINE_TOPIC = 'ladet/tx/online';
  */
 export const RX_STATUS_TOPIC = 'ladet/rx/status';
 
-/** Mode tampilan publik warga (retained agar browser warga baru langsung tahu). */
-export const PUBLIC_MODE_TOPIC = 'ladet/config/public_mode';
-
-export interface PublicModeStatus {
-  /** true = data eksperimen disembunyikan dari halaman warga */
-  testing: boolean;
-  /** Unix ms; setelah lewat, warga wajib kembali ditampilkan */
-  until?: number;
-  updated_at?: string;
-}
-
 export interface ConfigStatus {
   /** SF radio yang aktif setelah config (7/9/12) */
   sf?: number;
@@ -334,46 +368,8 @@ export interface ConfigStatus {
   distance?: number;
   /** true = TX sudah mengonfirmasi via handshake LoRa */
   tx_confirmed?: boolean;
-  /** applied | queued | rejected | tx_unconfirmed | idle | run_queued | run_started | run_busy | run_unconfirmed */
-  state?: 'applied' | 'queued' | 'rejected' | 'tx_unconfirmed' | 'idle'
-       | 'run_queued' | 'run_started' | 'run_resynced' | 'run_busy' | 'run_unconfirmed';
-}
-
-/** Perintah ke perangkat (web → MQTT → RX → LoRa → TX). */
-export const CMD_TOPIC = 'ladet/config/cmd';
-
-export type DeviceCommand = 'ENGINEER' | 'RUN' | 'MONITOR';
-
-export function publishCmd(client: MqttClient, cmd: DeviceCommand): void {
-  // retain:false WAJIB — kalau retained, RX yang reconnect akan memulai run
-  // sendiri tanpa ditekan (dan itu melanggar "run dimulai saat dipencet").
-  client.publish(CMD_TOPIC, cmd, { retain: false });
-}
-
-export function releaseEngineerSession(client: MqttClient | null): void {
-  if (!client?.connected) return;
-  publishCmd(client, 'MONITOR');
-  publishPublicMode(client, false);
-}
-
-/** Engineer mengatur apakah status eksperimen boleh dilihat warga. */
-export function publishPublicMode(client: MqttClient, testing: boolean, durationMs = 30 * 60 * 1000): void {
-  const payload: PublicModeStatus = {
-    testing,
-    until: testing ? Date.now() + durationMs : undefined,
-    updated_at: new Date().toISOString(),
-  };
-  client.publish(PUBLIC_MODE_TOPIC, JSON.stringify(payload), { retain: true });
-}
-
-export function parsePublicMode(msg: Buffer | string): PublicModeStatus | null {
-  try {
-    const parsed = JSON.parse(typeof msg === 'string' ? msg : msg.toString()) as PublicModeStatus;
-    if (typeof parsed.testing !== 'boolean') return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  /** applied | queued | rejected | tx_unconfirmed | idle */
+  state?: 'applied' | 'queued' | 'rejected' | 'tx_unconfirmed' | 'idle';
 }
 
 export function parseConfigStatus(msg: Buffer | string): ConfigStatus | null {

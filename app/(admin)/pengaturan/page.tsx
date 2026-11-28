@@ -59,22 +59,27 @@ export default function PengaturanPage() {
   const [tiltDanger,  setTiltDanger]  = useState(String(DEFAULT_THRESHOLDS.tilt_angle.bahaya));
 
   useEffect(() => {
-    setBrokerUrl(localStorage.getItem(KEYS.brokerUrl) ?? 'wss://broker.hivemq.com:8884/mqtt');
-    setTopic(    localStorage.getItem(KEYS.topic)     ?? 'ladet/data');
-    setPort(     localStorage.getItem(KEYS.port)      ?? '8884');
-    setTgToken(  localStorage.getItem(KEYS.tgToken)   ?? '');
-    setTgChatId( localStorage.getItem(KEYS.tgChatId)  ?? '');
-    setTgEnabled(localStorage.getItem(KEYS.tgEnabled) === 'true');
-    const t = loadThresholds();
-    setMoistWarn(String(t.soil_saturation.hatiHati));
-    setMoistAlert(String(t.soil_saturation.waspada));
-    setMoistDanger(String(t.soil_saturation.bahaya));
-    setVibWarn(String(t.vibration_freq.hatiHati));
-    setVibAlert(String(t.vibration_freq.waspada));
-    setVibDanger(String(t.vibration_freq.bahaya));
-    setTiltWarn(String(t.tilt_angle.hatiHati));
-    setTiltAlert(String(t.tilt_angle.waspada));
-    setTiltDanger(String(t.tilt_angle.bahaya));
+    // Dibungkus fungsi: setState langsung di badan effect memicu lint
+    // react-hooks/set-state-in-effect. Perilaku sama (muat sekali saat mount).
+    function loadSaved() {
+      setBrokerUrl(localStorage.getItem(KEYS.brokerUrl) ?? 'wss://broker.hivemq.com:8884/mqtt');
+      setTopic(    localStorage.getItem(KEYS.topic)     ?? 'ladet/data');
+      setPort(     localStorage.getItem(KEYS.port)      ?? '8884');
+      setTgToken(  localStorage.getItem(KEYS.tgToken)   ?? '');
+      setTgChatId( localStorage.getItem(KEYS.tgChatId)  ?? '');
+      setTgEnabled(localStorage.getItem(KEYS.tgEnabled) === 'true');
+      const t = loadThresholds();
+      setMoistWarn(String(t.soil_saturation.hatiHati));
+      setMoistAlert(String(t.soil_saturation.waspada));
+      setMoistDanger(String(t.soil_saturation.bahaya));
+      setVibWarn(String(t.vibration_freq.hatiHati));
+      setVibAlert(String(t.vibration_freq.waspada));
+      setVibDanger(String(t.vibration_freq.bahaya));
+      setTiltWarn(String(t.tilt_angle.hatiHati));
+      setTiltAlert(String(t.tilt_angle.waspada));
+      setTiltDanger(String(t.tilt_angle.bahaya));
+    }
+    loadSaved();
   }, []);
 
   function handleSave() {
