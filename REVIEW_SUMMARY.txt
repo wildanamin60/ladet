@@ -1,0 +1,33 @@
+=== RINGKASAN PERBAIKAN TIMEOUT & CONNECTION ===
+
+FIXUTAMA yang sudah di-code di firmware/ladet-rx-mqtt/ladet-rx-mqtt.ino:
+
+1. publishToMQTT() -> publish MQTT langsung (bukan cuma push queue)
+2. publishConfigStatus() -> publish MQTT langsung
+3. Telegram timeout: connect 2000ms, read 2000ms, handshake 4dtk (dulu 2500/2500/6dtk)
+4. Watchdog 90 detik emergency, TIDAK reboot karena WiFi/MQTT masalah
+5. Tidak ada reboot jaringan: cuma peringatan Serial 1x/10 menit
+6. Semua kode FreeRTOS queue-task DIHAPUS (bukan work tanpa setup di setup())
+
+FIX DI TX firmware/ladet-tx/ladet-tx.ino:
+
+7. ACK_WAIT_MS 1500ms biasa, tapi kalau 3 timeout beruntun -> turun ke 600ms (ACK_WAIT_FAST_MS)
+8. Recover Tx LoRa butuh 6 timeout (dulu 3) sebelum init ulang
+
+FIX SETTING:
+
+9. ACK_TX_POWER 4 dBm (board ini max 4 dBm, >=14 dBm = brownout)
+10. TEST 50 paket: selalu 1-50, tidak peduli SEQ TX
+
+BUILD STATUS:
+- npx tsc --noEmit -> 0 error
+- npm run build -> sukses
+
+ROOT CAUSE SEBELUM (sudah diperbaiki):
+
+-> ACK 17 dBm -> brownout regulator AMS1117 -> RX reboot tiap paket -> 15-20s loss
+-> Semua tugas (LoRa + WiFi + MQTT + Telegram) di satu loop -> jaringan blokir radio
+-> Reboot kalau MQTT 5 menit tidak terkoneksi -> lubang data ±20 detik tiap 5 menit
+-> Watchdog 30 detik -> reboot ringan dari gangguan ringan
+-> Config handshake butuh MQTT connected -> gagal kalau internet lemot
+-> Timeout Telegram 6 detik handshake -> makan waktu loop lama
