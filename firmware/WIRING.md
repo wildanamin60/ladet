@@ -1,7 +1,7 @@
 # LADET — Wiring Pin Lengkap (TX & RX)
 
-Dokumen ini untuk dicek langsung terhadap PCB. Semua nomor adalah **nomor GPIO ESP32
-(DevKit 30/38 pin)**, bukan nomor pin fisik pada header.
+Dokumen ini untuk dicek langsung terhadap PCB. Semua nomor adalah **nomor GPIO
+ESP32 (DevKit 30/38 pin)**, bukan nomor pin fisik pada header.
 
 Ringkasan cepat:
 
@@ -9,23 +9,26 @@ Ringkasan cepat:
 |---|---|---|
 | LoRa SCK | 18 | 18 |
 | LoRa MISO | 19 | 19 |
-| LoRa MOSI | **25** | **25** ⚠️ |
+| LoRa MOSI | **25** | **23** ⚠️ |
 | LoRa NSS/CS | 5 | 5 |
 | LoRa RST | 14 | 14 |
 | LoRa DIO0 | 4 | 4 |
 | I2C SDA (ADXL345 + BNO055) | 21 | — |
 | I2C SCL (ADXL345 + BNO055) | 22 | — |
 | Soil moisture (analog) | 34 | — |
-| LED hijau (relay) | — | **27** |
-| LED kuning (relay) | — | **26** |
-| LED merah + buzzer BAHAYA (1 relay) | — | **25** ⚠️ |
-| Buzzer WASPADA (relay) | — | **33** |
+| Baterai (opsional, pembagi tegangan) | 35 | — |
+| Relay hijau (AMAN) | — | 27 |
+| Relay kuning (HATI-HATI / WASPADA) | — | 26 |
+| Relay merah + buzzer BAHAYA (satu kanal) | — | 25 ⚠️ |
+| Buzzer WASPADA (relay) | — | 33 |
+| LCD SDA / SCL | — | 21 / 22 |
 
-⚠️ = bentrok, baca bagian [GPIO 25](#-gpio-25-bentrok-wajib-dicek) dulu.
+⚠️ = GPIO25 dipakai relay merah di RX, jadi MOSI LoRa RX **wajib** 23. Baca
+bagian [GPIO 25](#-gpio-25-di-rx-mosi-lora-harus-23) dulu.
 
 ---
 
-## 1. TX — `ladet-tx`
+## 1. TX — `ladet-tx-realtime`
 
 ### LoRa SX1278 (SPI)
 
@@ -62,23 +65,49 @@ BNO055: alamat I2C `0x28`.
 
 > GPIO34–39 **hanya input**. Jangan dipakai untuk LED/relay/buzzer.
 
+### Pembagi tegangan baterai (opsional)
+
+Supaya tegangan baterai ikut terkirim ke RX, set `BATTERY_MONITOR 1` di
+`ladet-tx-realtime.ino` **setelah** rangkaian ini dipasang.
+
+```
+Baterai + ── R1 ──┬── GPIO 35
+                  │
+                  R2
+                  │
+GND ──────────────┘
+```
+
+`Vbaterai = V_ADC × (R1 + R2) / R2`, dan `V_ADC` tidak boleh lebih dari 3.3 V.
+
+| Baterai | R1 | R2 | Rasio (`BATTERY_RATIO`) | Batas ukur |
+|---|---|---|---|---|
+| 3.7–4.2 V (1 sel Li-ion) | 100k | 100k | 2.0 | 6.6 V |
+| 12 V (aki/SLA) | 330k | 100k | 4.3 | 14.2 V |
+
+Kalau memakai aki 12 V, TX tetap butuh buck converter 5 V → 3.3 V untuk ESP32;
+pembagi hanya untuk mengukur, bukan untuk memberi daya.
+
+Tanpa pembagi, pin 35 melayang dan terbaca sebagai angka acak — itu sebabnya
+`BATTERY_MONITOR` default `0`.
+
 ### Tidak dipakai lagi
 
 | Komponen | Status |
 |---|---|
-| DS3231 / RTC | **Dilepas.** Tidak ada pin I2C khusus untuknya; firmware tidak lagi menuntutnya saat boot. Jam absolut diisi RX lewat NTP. |
+| DS3231 / RTC | **Dilepas.** Firmware tidak menuntutnya saat boot. Jam absolut diisi RX lewat NTP. |
 
 ---
 
-## 2. RX — `ladet-rx-mqtt`
+## 2. RX — `ladet-rx-realtime`
 
-### LoRa SX1278 (SPI) — sama dengan TX
+### LoRa SX1278 (SPI) — beda MOSI dari TX
 
 | Sinyal modul | GPIO ESP32 |
 |---|---|
 | SCK | 18 |
 | MISO | 19 |
-| MOSI | **25** |
+| MOSI | **23** |
 | NSS / CS | 5 |
 | RST | 14 |
 | DIO0 | 4 |
@@ -86,12 +115,13 @@ BNO055: alamat I2C `0x28`.
 | GND | GND |
 
 ### Modul relay 4 kanal (aktuator)
+
 | Kanal | Fungsi | GPIO | Perilaku |
 |---|---|---|---|
-| CH1 | LED hijau | **27** | menyala saat `AMAN` |
-| CH2 | LED kuning | **26** | menyala saat `HATI-HATI` dan `WASPADA` |
-| CH3 | LED merah + buzzer BAHAYA (satu kanal) | **25** | menyala saat `BAHAYA` |
-| CH4 | Buzzer WASPADA | **33** | menyala saat `WASPADA` saja |
+| CH1 | LED hijau | 27 | menyala saat `AMAN` |
+| CH2 | LED kuning | 26 | menyala saat `HATI-HATI` dan `WASPADA` |
+| CH3 | LED merah + buzzer BAHAYA (satu kanal) | 25 | menyala saat `BAHAYA` |
+| CH4 | Buzzer WASPADA | 33 | menyala saat `WASPADA` saja |
 
 Logika yang dijalankan RX (dari field `STATUS=` kiriman TX lewat LoRa):
 
@@ -102,12 +132,10 @@ Logika yang dijalankan RX (dari field `STATUS=` kiriman TX lewat LoRa):
 | WASPADA | off | ON | off | **ON** | ✅ |
 | BAHAYA | off | off | **ON** | off | ✅ |
 
-Buzzer BAHAYA tidak di pin 33 — sudah menyatu di kanal relay merah.
-Jadi saat BAHAYA: LED merah + buzzer bahaya berbunyi bersamaan dari satu relay.
+Buzzer BAHAYA tidak di pin 33 — sudah menyatu di kanal relay merah. Jadi saat
+BAHAYA: LED merah + buzzer bahaya berbunyi bersamaan dari satu relay.
 
 ### Wiring modul relay
-
-Modul relay 4 kanal yang umum dipakai (optocoupler, aktif **LOW**):
 
 | Pin modul | Sambung ke | Catatan |
 |---|---|---|
@@ -135,9 +163,9 @@ benar-benar terisolasi dan Anda paham risikonya.
 ESP32 (dari USB) tidak sanggup dan bisa brownout. Pakai adaptor 5 V 1–2 A
 terpisah. Ini juga melindungi RX supaya tidak reboot saat semua relay menyala.
 
-**Polaritas:** modul relay Anda sudah diuji dengan
-`firmware/tools/relay-test/` dan terbukti **aktif HIGH** (HIGH = ON).
-Karena itu firmware diset `#define RELAY_ACTIVE_LOW 0`.
+**Polaritas:** modul relay Anda sudah diuji dengan `firmware/tools/relay-test/`
+dan terbukti **aktif HIGH** (HIGH = ON). Karena itu firmware diset
+`#define RELAY_ACTIVE_LOW 0`.
 
 Kalau suatu saat modul diganti dengan tipe aktif LOW, ubah menjadi `1`.
 Ciri modul aktif LOW: relay justru menyala saat pin diberi LOW.
@@ -154,22 +182,26 @@ Ciri modul aktif LOW: relay justru menyala saat pin diberi LOW.
 - Modul yang dipakai: backpack **PCF8574** (4 pin), ukuran **20 kolom × 4 baris**.
 - **Alamat I2C dicari otomatis** saat boot (0x27, 0x3F, lalu scan 0x08–0x77),
   jadi Anda tidak perlu tahu alamatnya.
-- Serial akan mencetak `LCD 20x4 : OK di alamat 0x27` atau
-  `tidak ditemukan` bila kabel/backpack bermasalah.
+- Serial akan mencetak `LCD 20x4        : OK (0x27)` atau
+  `tidak ditemukan (dilewati)` bila kabel/backpack bermasalah.
 - Kalau layar menyala tapi tidak ada tulisan, putar **potensiometer kontras**
   di belakang backpack.
 
 Isi layar saat berjalan:
 
 ```
-LADET RX  WiFi:OK
-Status: WASPADA
-S:72.5% G:0.12g
-T:4.3° -87dBm
+LADET SIGAP CARE
+STATUS: AMAN
+Kelembapan: 42.5%
+Kemiringan: Aman
 ```
 
-Baris 2 berubah jadi `TX HILANG` bila 30 detik tidak ada paket LoRa; relay
-tetap memegang level terakhir (disengaja demi keselamatan).
+Baris 1 berubah jadi `LADET  [WIFI HILANG]` bila WiFi putus. Baris 2 berubah
+jadi `TX HILANG` bila 15 detik tidak ada paket LoRa; relay tetap memegang level
+terakhir (disengaja demi keselamatan).
+
+Baris 4 memakai kata, bukan angka: `Aman`, `Bergetar`, `Waspada`, `Miring`,
+`Bahaya` — supaya warga desa langsung paham tanpa membaca satuan.
 
 ## 🚨 Semua relay nyala saat boot (tanpa TX) — cara mendiagnosa
 
@@ -214,7 +246,7 @@ membuat relay "tidak mau mati".
 
 ---
 
-## Pin LoRa TX dan RX BERBEDA (sudah dikonfirmasi di PCB)
+## GPIO 25 di RX: MOSI LoRa harus 23
 
 | Board | MOSI | Keterangan |
 |---|---|---|
@@ -222,10 +254,10 @@ membuat relay "tidak mau mati".
 | **RX** | **23** | GPIO25 dipakai relay LED merah + buzzer BAHAYA |
 
 ```cpp
-// ladet-tx.ino
+// ladet-tx-realtime.ino
 #define LORA_MOSI    25
 
-// ladet-rx-mqtt.ino
+// ladet-rx-realtime.ino
 #define LORA_MOSI    23
 #define PIN_LED_RED  25
 ```
@@ -233,9 +265,7 @@ membuat relay "tidak mau mati".
 SCK/MISO/NSS/RST/DIO0 tetap sama di kedua board (18/19/5/14/4).
 
 Jangan menyamakan `LORA_MOSI` RX dengan TX: kalau RX memakai 25, pin relay
-merah bertabrakan dengan jalur SPI dan LoRa gagal baca register. Firmware
-menjaga ini otomatis — `ACTUATOR_RED_CONFLICT` akan mematikan kanal merah dan
-mencetak peringatan kalau suatu saat angkanya kembali bentrok.
+merah bertabrakan dengan jalur SPI dan LoRa gagal baca register.
 
 ---
 
@@ -248,21 +278,25 @@ mencetak peringatan kalau suatu saat angkanya kembali bentrok.
 | 1, 3 | UART0 (Serial Monitor / upload) |
 | 0, 2, 12, 15 | pin strapping saat boot — hindari untuk relay |
 
-Sisa pin aman untuk pengembangan: 13, 16, 17, 23, 32.
+Sisa pin aman untuk pengembangan: 13, 16, 17, 32 (35 dipakai opsional untuk
+pembagi tegangan baterai).
 
 ---
 
 ## Urutan upload & cek
 
-1. **TX** — `firmware/ladet-tx/ladet-tx.ino` → Serial 115200 → tunggu
-   `TX STATUS: BERHASIL`.
+1. **TX** — `firmware/ladet-tx-realtime/ladet-tx-realtime.ino` → board
+   **ESP32 Dev Module** → Serial 115200 → tunggu
+   `Baseline terkunci: ...` lalu `▶️  Streaming realtime dimulai...`.
 2. **RX** — salin `secrets.example.h` → `secrets.h`, isi token + chat id
    (opsional; tanpa itu aktuator tetap jalan) → upload.
 3. Cek Serial RX:
-   - `Aktuator : merah=... kuning=... hijau=... buzzer=... (relay aktif LOW)`
-   - tidak ada `PERINGATAN BENTROK PIN`
-   - `✅ RX Gateway siap!`
-4. Uji paksa tiap relay dengan menekan/mengubah kondisi sensor TX, atau
-   sementara ubah `applyActuators()` untuk menyalakan satu kanal.
+   - `LCD 20x4        : OK (0x27)`
+   - `✅ MQTT terhubung`
+   - `LoRa SX1278     : OK (433 MHz, SF7, Listen-Only)`
+   - `✅ RX Realtime Gateway siap!`
+4. Uji tiap relay dengan mengubah kondisi sensor TX (tanah dibasahi, node
+   digetarkan, node dimiringkan), atau sementara panggil `applyActuators()`
+   manual.
 5. Uji Telegram: matikan WiFi RX → naikkan status ke WASPADA → nyalakan WiFi →
    pesan harus terkirim (antrian maksimal 30 menit).
