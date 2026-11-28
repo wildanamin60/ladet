@@ -46,7 +46,9 @@
 #define LORA_DIO0     4
 
 #define LORA_FREQUENCY    433E6
-#define LORA_BW           125E3
+#define LORA_BW           500E3   // 125E3 = skenario standar, 500E3 = skenario optimasi delay
+                                  // (airtime ÷4). HARUS SAMA dengan LORA_BW di firmware RX,
+                                  // kalau tidak tidak ada satu paket pun yang masuk.
 #define LORA_CR           5
 #define LORA_SF           7      // 7 / 9 / 12 sesuai skenario
 #define LORA_SYNC_WORD    0x12
@@ -369,7 +371,12 @@ SensorData readSensors() {
 }
 
 unsigned long ackWindowMs() {
-  return (activeSF == 12) ? ACK_WINDOW_SF12 : ACK_WINDOW_SF7;
+  // ACK "ACK=<seq>" hanya 6 byte: 36 ms @SF7/125k, 10 ms @SF7/500k,
+  // 991 ms @SF12/125k, 250 ms @SF12/500k. Jendela 3200 ms di BW 500 kHz
+  // membuat satu siklus paket jadi ±5 dtk (jendela mendominasi airtime),
+  // jadi dipersempit ke 900 ms.
+  if (activeSF == 12) return (LORA_BW >= 500E3) ? 900UL : ACK_WINDOW_SF12;
+  return ACK_WINDOW_SF7;
 }
 
 void handleIncoming(String in) {
@@ -403,12 +410,15 @@ void radioListen(unsigned long windowMs) {
 bool sendPacket(const SensorData& d, int packetSeq) {
   char pkt[240];
 
+  // THETAR/THETAS sengaja TIDAK dikirim: nilainya konstanta #define, tidak
+  // pernah berubah, dan 22 byte itu menambah ±10 ms airtime di SF7 (lebih
+  // besar di SF9/SF12). RX mengisi field yang sama dari konstantanya sendiri.
   int len = snprintf(pkt, sizeof(pkt),
-    "TYPE=DATA,SEQ=%d,THETA=%.3f,THETAR=%.3f,THETAS=%.3f,SAT=%.3f,"
+    "TYPE=DATA,SEQ=%d,THETA=%.3f,SAT=%.3f,"
     "G0=%.3f,G=%.3f,DG=%.3f,"
     "TX=%.2f,TY=%.2f,TZ=%.2f,DTX=%.2f,DTY=%.2f,DTZ=%.2f,DTH=%.2f,"
     "THETA0=%.2f,MS=%lu,",
-    packetSeq, d.theta, THETA_R, THETA_S, d.sat,
+    packetSeq, d.theta, d.sat,
     d.g0, d.g, d.dg,
     d.tiltX, d.tiltY, d.tiltZ,
     d.dTiltX, d.dTiltY, d.dTiltZ, d.dTheta,

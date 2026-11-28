@@ -83,6 +83,11 @@ const char* MQTT_TOPIC  = "ladet/data";
 // Ganti sesuai skenario pengujian: 7, 9, atau 12
 #define LORA_SF     7
 
+// LoRa Bandwidth — HARUS SAMA DENGAN TX.
+// 500E3 = skenario optimasi delay (airtime ÷4 dibanding 125E3).
+// Kalau TX 500 kHz sedangkan RX 125 kHz, tidak ada paket yang masuk sama sekali.
+#define LORA_BW     500E3
+
 // Daya kirim ACK dari RX. SAMAKAN dengan TX: hardware LADET memakai regulator
 // AMS1117 yang tidak kuat menahan lonjakan arus PA. Di TX, 4 dBm terbukti
 // stabil dan ≥14 dBm menyebabkan BROWNOUT. Default library LoRa = 17 dBm —
@@ -959,7 +964,7 @@ void recoverLoRa(const char* reason) {
   }
 
   LoRa.setSpreadingFactor(activeSF);
-  LoRa.setSignalBandwidth(125E3);
+  LoRa.setSignalBandwidth(LORA_BW);
   LoRa.setCodingRate4(5);
   LoRa.setSyncWord(0x12);
   LoRa.enableCrc();
@@ -1280,10 +1285,12 @@ void setup() {
   // SF manual murni: selalu gunakan #define LORA_SF (hapus NVS lama jika ada)
   activeSF = LORA_SF;
   LoRa.setSpreadingFactor(activeSF);
+  LoRa.setSignalBandwidth(LORA_BW);   // jaga-jaga setelah recovery radio
   prefs.begin("ladet", false);
   prefs.remove("sf");
   prefs.end();
-  Serial.printf("📡 LoRa SF aktif: %d (sesuai #define LORA_SF)\n", activeSF);
+  Serial.printf("📡 LoRa aktif: SF%d / %lu kHz (sesuai #define LORA_SF & LORA_BW)\n",
+                activeSF, (unsigned long)(LORA_BW / 1000));
   
   Serial.println("✅ RX Gateway siap!");
   Serial.printf("📡 MQTT Topic: %s\n", MQTT_TOPIC);
@@ -1563,7 +1570,7 @@ void setupLoRa() {
   
   // LoRa parameters (sama dengan TX)
   LoRa.setSpreadingFactor(LORA_SF);
-  LoRa.setSignalBandwidth(125E3);
+  LoRa.setSignalBandwidth(LORA_BW);
   LoRa.setCodingRate4(5);
   LoRa.setSyncWord(0x12);
   LoRa.enableCrc();  // CRC enabled (sama dengan TX)
@@ -1572,8 +1579,8 @@ void setupLoRa() {
   Serial.println(" ✅");
   Serial.println("   LoRa Configuration:");
   Serial.printf("   Frequency : %.1f MHz\n", LORA_FREQ / 1E6);
-  Serial.printf("   SF        : %d\n", LORA_SF);
-  Serial.println("   BW        : 125 kHz");
+  Serial.printf("   SF / BW   : SF%d / %lu kHz (HARUS sama dengan TX)\n",
+                LORA_SF, (unsigned long)(LORA_BW / 1000));
   Serial.println("   CR        : 4/5");
   Serial.println("   CRC       : Enabled");
   Serial.println("   Sync Word : 0x12");
@@ -2011,8 +2018,10 @@ SensorData parsePacket(String raw) {
   data.soil_raw = 0;
   data.soil_mv = 0;
   data.theta = 0.0;
-  data.theta_r = 0.0;
-  data.theta_s = 0.0;
+  // THETAR/THETAS tidak lagi dikirim TX (konstanta, hemat 22 byte airtime);
+  // nilainya sama dengan #define THETA_R/THETA_S di firmware TX.
+  data.theta_r = 0.05;
+  data.theta_s = 0.45;
   data.sat = 0.0;
   data.g0 = 0.0;
   data.g = 0.0;
